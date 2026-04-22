@@ -13,6 +13,7 @@ let drawnPolygon = null
 let flightLineLayer = null
 let planLayer = null
 let selectedLineIds = []
+let windLayer = null
 
 const markup = `
 <div id="hyplanTool">
@@ -40,6 +41,8 @@ const markup = `
         <select id="hyplan-wind-kind">
             <option value="still_air" selected>Still Air</option>
             <option value="constant">Constant Wind</option>
+            <option value="gfs">GFS Forecast</option>
+            <option value="gmao">GMAO GEOS-FP</option>
         </select>
         <div id="hyplan-wind-params" style="display:none">
             <label>Wind Speed (kt)</label>
@@ -47,6 +50,9 @@ const markup = `
             <label>Wind Direction (deg from)</label>
             <input type="number" id="hyplan-wind-direction" value="0" />
         </div>
+        <button id="hyplan-show-wind-btn">Show Wind on Map</button>
+        <button id="hyplan-hide-wind-btn" style="display:none">Hide Wind</button>
+        <div id="hyplan-wind-status" class="hyplan-status"></div>
     </div>
 
     <div class="hyplan-section">
@@ -120,6 +126,84 @@ function interfaceWithMMGIS() {
         } else {
             $('#hyplan-wind-params').hide()
         }
+    })
+
+    // Show Wind on Map
+    $('#hyplan-show-wind-btn').on('click', function () {
+        const windKind = $('#hyplan-wind-kind').val()
+        if (windKind !== 'gfs' && windKind !== 'gmao') {
+            $('#hyplan-wind-status').text('Select GFS or GMAO wind source to visualize.')
+            return
+        }
+
+        const bounds = Map_.map.getBounds()
+        const altitude = parseFloat($('#hyplan-altitude').val()) || 3000
+        const takeoffTime = $('#hyplan-takeoff-time').val()
+        const time = takeoffTime ? takeoffTime + ':00Z' : new Date().toISOString()
+
+        $('#hyplan-wind-status').text('Fetching wind data...')
+        $('#hyplan-show-wind-btn').prop('disabled', true)
+
+        fetch(`${SERVICE_URL}/wind-grid`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source: windKind,
+                bounds: [
+                    bounds.getWest(),
+                    bounds.getSouth(),
+                    bounds.getEast(),
+                    bounds.getNorth(),
+                ],
+                time: time,
+                altitude_m: altitude,
+            }),
+        })
+        .then(r => {
+            if (!r.ok) return r.json().then(d => { throw new Error(getErrorMessage(d)) })
+            return r.json()
+        })
+        .then(data => {
+            if (windLayer) {
+                Map_.map.removeLayer(windLayer)
+            }
+            windLayer = window.L.velocityLayer({
+                displayValues: true,
+                displayOptions: {
+                    velocityType: 'Wind',
+                    displayPosition: 'bottomleft',
+                    displayEmptyString: 'No wind data',
+                },
+                data: data,
+                maxVelocity: 30,
+                velocityScale: 0.005,
+                particleAge: 90,
+                lineWidth: 1.5,
+                particleMultiplier: 1 / 300,
+                frameRate: 15,
+            })
+            windLayer.addTo(Map_.map)
+            $('#hyplan-wind-status').text(`Wind streamlines displayed (${windKind.toUpperCase()}).`)
+            $('#hyplan-show-wind-btn').hide()
+            $('#hyplan-hide-wind-btn').show()
+        })
+        .catch(err => {
+            $('#hyplan-wind-status').text('Error: ' + err.message)
+        })
+        .finally(() => {
+            $('#hyplan-show-wind-btn').prop('disabled', false)
+        })
+    })
+
+    // Hide Wind
+    $('#hyplan-hide-wind-btn').on('click', function () {
+        if (windLayer) {
+            Map_.map.removeLayer(windLayer)
+            windLayer = null
+        }
+        $('#hyplan-wind-status').text('')
+        $('#hyplan-hide-wind-btn').hide()
+        $('#hyplan-show-wind-btn').show()
     })
 
     // Read service URL from config if available
@@ -443,6 +527,10 @@ function interfaceWithMMGIS() {
         if (planLayer) {
             Map_.map.removeLayer(planLayer)
             planLayer = null
+        }
+        if (windLayer) {
+            Map_.map.removeLayer(windLayer)
+            windLayer = null
         }
         campaignId = null
         selectedLineIds = []
