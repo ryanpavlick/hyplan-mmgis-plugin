@@ -128,6 +128,21 @@ function interfaceWithMMGIS() {
         }
     } catch (e) { /* use default */ }
 
+    // Check service connectivity
+    fetch(`${SERVICE_URL}/health`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'ok') {
+                $('#hyplan-generate-status').text(`Connected to HyPlan service v${data.service_version}`)
+            }
+        })
+        .catch(() => {
+            $('#hyplan-generate-status').html(
+                '<span style="color:#ef4444">Cannot connect to HyPlan service. ' +
+                'Check that the service is running and the URL is correct.</span>'
+            )
+        })
+
     // Load aircraft and sensor lists from service
     fetch(`${SERVICE_URL}/aircraft`)
         .then(r => r.json())
@@ -170,7 +185,17 @@ function interfaceWithMMGIS() {
     $('#hyplan-generate-btn').on('click', function () {
         const polygon = getDrawnPolygon()
         if (!polygon) {
-            $('#hyplan-generate-status').text('Draw a polygon on the map first (use the Draw tool).')
+            $('#hyplan-generate-status').text('Error: Draw a polygon on the map first using the Draw tool.')
+            return
+        }
+        const altVal = parseFloat($('#hyplan-altitude').val())
+        if (isNaN(altVal) || altVal <= 0) {
+            $('#hyplan-generate-status').text('Error: Altitude must be a positive number.')
+            return
+        }
+        const overlapVal = parseFloat($('#hyplan-overlap').val())
+        if (isNaN(overlapVal) || overlapVal < 0 || overlapVal >= 100) {
+            $('#hyplan-generate-status').text('Error: Overlap must be between 0 and 100.')
             return
         }
 
@@ -206,8 +231,8 @@ function interfaceWithMMGIS() {
         })
         .then(r => r.json())
         .then(data => {
-            if (data.detail) {
-                $('#hyplan-generate-status').text('Error: ' + data.detail)
+            if (data.detail || data.message) {
+                $('#hyplan-generate-status').text('Error: ' + getErrorMessage(data))
                 return
             }
             campaignId = data.campaign_id
@@ -272,8 +297,8 @@ function interfaceWithMMGIS() {
         })
         .then(r => r.json())
         .then(data => {
-            if (data.detail) {
-                $('#hyplan-optimize-status').text('Error: ' + data.detail)
+            if (data.detail || data.message) {
+                $('#hyplan-optimize-status').text('Error: ' + getErrorMessage(data))
                 return
             }
             // Apply the optimized order
@@ -342,8 +367,8 @@ function interfaceWithMMGIS() {
         })
         .then(r => r.json())
         .then(data => {
-            if (data.detail) {
-                $('#hyplan-compute-status').text('Error: ' + data.detail)
+            if (data.detail || data.message) {
+                $('#hyplan-compute-status').text('Error: ' + getErrorMessage(data))
                 return
             }
             displayPlan(data.segments)
@@ -380,8 +405,8 @@ function interfaceWithMMGIS() {
         })
         .then(r => r.json())
         .then(data => {
-            if (data.detail) {
-                $('#hyplan-export-status').text('Error: ' + data.detail)
+            if (data.detail || data.message) {
+                $('#hyplan-export-status').text('Error: ' + getErrorMessage(data))
                 return
             }
             const count = data.artifacts.length
@@ -503,14 +528,61 @@ function updateLineList(geojson) {
     geojson.features.forEach(function (f) {
         const lineId = f.properties.line_id || f.id
         const name = f.properties.site_name || lineId
-        const item = $('<div>')
-            .addClass('hyplan-line-item')
-            .attr('data-lineid', lineId)
-            .text(name)
-            .on('click', function () {
-                toggleLineSelection(lineId)
-            })
+        // Compute length from coordinates
+        const coords = f.geometry.coordinates
+        let lengthKm = ''
+        if (coords && coords.length >= 2) {
+            const dLat = (coords[1][1] - coords[0][1]) * 111.32
+            const dLon = (coords[1][0] - coords[0][0]) * 111.32 * Math.cos(coords[0][1] * Math.PI / 180)
+            lengthKm = Math.sqrt(dLat * dLat + dLon * dLon).toFixed(1)
+        }
+        const alt = f.properties.altitude_msl ? `${f.properties.altitude_msl}m` : ''
+
+        const row = $('<div>').addClass('hyplan-line-item').attr('data-lineid', lineId)
+
+        const label = $('<span>')
+            .css('flex', '1')
+            .html(`${name} <span style="color:#888; font-size:10px">${lengthKm}km ${alt}</span>`)
+            .on('click', function () { toggleLineSelection(lineId) })
+
+        const upBtn = $('<span>')
+            .html('&#9650;')
+            .css({ cursor: 'pointer', padding: '0 3px', fontSize: '10px' })
+            .attr('title', 'Move up')
+            .on('click', function (e) { e.stopPropagation(); moveLineInSelection(lineId, -1) })
+
+        const downBtn = $('<span>')
+            .html('&#9660;')
+            .css({ cursor: 'pointer', padding: '0 3px', fontSize: '10px' })
+            .attr('title', 'Move down')
+            .on('click', function (e) { e.stopPropagation(); moveLineInSelection(lineId, 1) })
+
+        row.css({ display: 'flex', alignItems: 'center' })
+        row.append(label, upBtn, downBtn)
+        list.append(row)
+    })
+}
+
+function moveLineInSelection(lineId, direction) {
+    const idx = selectedLineIds.indexOf(lineId)
+    if (idx < 0) return
+    const newIdx = idx + direction
+    if (newIdx < 0 || newIdx >= selectedLineIds.length) return
+    // Swap
+    const temp = selectedLineIds[newIdx]
+    selectedLineIds[newIdx] = selectedLineIds[idx]
+    selectedLineIds[idx] = temp
+    // Reorder the DOM to match
+    const list = $('#hyplan-line-list')
+    selectedLineIds.forEach(lid => {
+        const item = $(`.hyplan-line-item[data-lineid="${lid}"]`)
         list.append(item)
+    })
+    // Move unselected items to the end
+    $('.hyplan-line-item').each(function () {
+        if (selectedLineIds.indexOf($(this).data('lineid')) < 0) {
+            list.append($(this))
+        }
     })
 }
 
@@ -545,6 +617,12 @@ function updateSelectionStatus() {
     $('#hyplan-selection-status').text(`${selected} of ${total} selected`)
     $('#hyplan-compute-btn').prop('disabled', selected === 0)
     $('#hyplan-optimize-btn').prop('disabled', selected < 2)
+}
+
+function getErrorMessage(data) {
+    if (data.detail) return typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
+    if (data.message) return data.message
+    return 'Unknown error'
 }
 
 export default HyPlanTool
