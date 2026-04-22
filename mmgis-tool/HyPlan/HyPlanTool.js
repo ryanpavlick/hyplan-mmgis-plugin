@@ -34,6 +34,8 @@ const markup = `
         <input type="text" id="hyplan-takeoff-airport" value="" placeholder="e.g. KPMD" />
         <label>Return Airport (ICAO, blank = same as takeoff)</label>
         <input type="text" id="hyplan-return-airport" value="" placeholder="" />
+        <label>Takeoff Time (UTC)</label>
+        <input type="datetime-local" id="hyplan-takeoff-time" value="" />
         <label>Wind</label>
         <select id="hyplan-wind-kind">
             <option value="still_air" selected>Still Air</option>
@@ -350,6 +352,10 @@ function interfaceWithMMGIS() {
         const takeoffAirport = $('#hyplan-takeoff-airport').val().trim().toUpperCase() || null
         const returnAirport = $('#hyplan-return-airport').val().trim().toUpperCase() || takeoffAirport
 
+        // Takeoff time
+        const takeoffTimeVal = $('#hyplan-takeoff-time').val()
+        const takeoffTime = takeoffTimeVal ? takeoffTimeVal + ':00Z' : null
+
         $('#hyplan-compute-status').text('Computing...')
         $('#hyplan-compute-btn').prop('disabled', true)
 
@@ -363,6 +369,7 @@ function interfaceWithMMGIS() {
                 wind: wind,
                 takeoff_airport: takeoffAirport,
                 return_airport: returnAirport,
+                takeoff_time: takeoffTime,
             }),
         })
         .then(r => r.json())

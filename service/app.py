@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import logging
 import os
 import traceback
@@ -157,6 +158,7 @@ class ComputePlanRequest(BaseModel):
     wind: dict = Field(default_factory=lambda: {"kind": "still_air"})
     takeoff_airport: Optional[str] = None
     return_airport: Optional[str] = None
+    takeoff_time: Optional[str] = None
 
 
 class ComputePlanResponse(BaseModel):
@@ -334,11 +336,20 @@ def compute_plan(req: ComputePlanRequest):
     return_airport = Airport(req.return_airport) if req.return_airport else None
 
     try:
+        # Parse takeoff time
+        takeoff_time = None
+        if req.takeoff_time:
+            try:
+                takeoff_time = datetime.datetime.fromisoformat(req.takeoff_time.replace('Z', '+00:00'))
+            except ValueError:
+                warnings.append(f"Invalid takeoff_time format: '{req.takeoff_time}', ignoring.")
+
         plan = compute_flight_plan(
             aircraft=aircraft,
             flight_sequence=flight_sequence,
             takeoff_airport=takeoff_airport,
             return_airport=return_airport,
+            takeoff_time=takeoff_time,
             **wind_kwargs,
         )
     except Exception as exc:
