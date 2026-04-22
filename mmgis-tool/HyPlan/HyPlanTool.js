@@ -14,6 +14,11 @@ let flightLineLayer = null
 let planLayer = null
 let selectedLineIds = []
 let windLayer = null
+let patternLayer = null
+let drawLineMode = false
+let drawLineStart = null
+let patternCenterMode = false
+let patternCenter = null
 
 const markup = `
 <div id="hyplanTool">
@@ -66,6 +71,40 @@ const markup = `
         <input type="text" id="hyplan-azimuth" value="" />
         <button id="hyplan-generate-btn">Generate Flight Box</button>
         <div id="hyplan-generate-status" class="hyplan-status"></div>
+    </div>
+
+    <div class="hyplan-section">
+        <h3>2b. Individual Lines</h3>
+        <p style="font-size:11px; color:var(--color-c)">Click two points on the map to add a line, or enter coordinates.</p>
+        <button id="hyplan-add-line-btn">Draw Line on Map</button>
+        <button id="hyplan-cancel-draw-btn" style="display:none">Cancel</button>
+        <button id="hyplan-delete-line-btn" disabled>Delete Selected Line</button>
+        <div id="hyplan-add-line-status" class="hyplan-status"></div>
+    </div>
+
+    <div class="hyplan-section">
+        <h3>2c. Flight Patterns</h3>
+        <p style="font-size:11px; color:var(--color-c)">Click a point on the map to set the center, then generate.</p>
+        <label>Pattern</label>
+        <select id="hyplan-pattern-type">
+            <option value="racetrack">Racetrack</option>
+            <option value="rosette">Rosette</option>
+            <option value="polygon">Polygon</option>
+            <option value="sawtooth">Sawtooth</option>
+            <option value="spiral">Spiral</option>
+        </select>
+        <label>Heading (deg)</label>
+        <input type="number" id="hyplan-pattern-heading" value="0" />
+        <div id="hyplan-pattern-params">
+            <label>Leg Length (m)</label>
+            <input type="number" id="hyplan-pattern-leg-length" value="10000" />
+            <label>Radius (m)</label>
+            <input type="number" id="hyplan-pattern-radius" value="5000" />
+        </div>
+        <button id="hyplan-set-pattern-center-btn">Set Center on Map</button>
+        <button id="hyplan-cancel-pattern-btn" style="display:none">Cancel</button>
+        <button id="hyplan-generate-pattern-btn" disabled>Generate Pattern</button>
+        <div id="hyplan-pattern-status" class="hyplan-status"></div>
     </div>
 
     <div class="hyplan-section">
@@ -519,6 +558,205 @@ function interfaceWithMMGIS() {
         })
     })
 
+    // --- Draw Line on Map ---
+    $('#hyplan-add-line-btn').on('click', function () {
+        drawLineMode = true
+        drawLineStart = null
+        $('#hyplan-add-line-btn').hide()
+        $('#hyplan-cancel-draw-btn').show()
+        $('#hyplan-add-line-status').text('Click the first point on the map.')
+        Map_.map.on('click', onDrawLineClick)
+    })
+
+    $('#hyplan-cancel-draw-btn').on('click', function () {
+        drawLineMode = false
+        drawLineStart = null
+        Map_.map.off('click', onDrawLineClick)
+        $('#hyplan-cancel-draw-btn').hide()
+        $('#hyplan-add-line-btn').show()
+        $('#hyplan-add-line-status').text('')
+    })
+
+    function onDrawLineClick(e) {
+        if (!drawLineMode) return
+        if (!drawLineStart) {
+            drawLineStart = e.latlng
+            $('#hyplan-add-line-status').text(`Start: (${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)}). Click end point.`)
+            return
+        }
+        // Second click — create line
+        const altitude = parseFloat($('#hyplan-altitude').val()) || 3000
+        const name = $('#hyplan-campaign-name').val() || 'Mission'
+
+        fetch(`${SERVICE_URL}/add-line`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                campaign_id: campaignId,
+                lat1: drawLineStart.lat,
+                lon1: drawLineStart.lng,
+                lat2: e.latlng.lat,
+                lon2: e.latlng.lng,
+                altitude_msl_m: altitude,
+                site_name: `Line ${$('.hyplan-line-item').length + 1}`,
+            }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail || data.message) {
+                $('#hyplan-add-line-status').text('Error: ' + getErrorMessage(data))
+                return
+            }
+            displayFlightLines(data.flight_lines)
+            updateLineList(data.flight_lines)
+            $('#hyplan-add-line-status').text(`Added line ${data.added_line_id}.`)
+        })
+        .catch(err => {
+            $('#hyplan-add-line-status').text('Error: ' + err.message)
+        })
+
+        drawLineMode = false
+        drawLineStart = null
+        Map_.map.off('click', onDrawLineClick)
+        $('#hyplan-cancel-draw-btn').hide()
+        $('#hyplan-add-line-btn').show()
+    }
+
+    // --- Delete Selected Line ---
+    $('#hyplan-delete-line-btn').on('click', function () {
+        if (!campaignId || selectedLineIds.length === 0) return
+
+        const lineId = selectedLineIds[selectedLineIds.length - 1]
+        fetch(`${SERVICE_URL}/delete-line`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                campaign_id: campaignId,
+                line_id: lineId,
+            }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail || data.message) {
+                $('#hyplan-add-line-status').text('Error: ' + getErrorMessage(data))
+                return
+            }
+            selectedLineIds = selectedLineIds.filter(id => id !== lineId)
+            displayFlightLines(data.flight_lines)
+            updateLineList(data.flight_lines)
+            updateSelectionStatus()
+            $('#hyplan-add-line-status').text(`Deleted ${lineId}.`)
+        })
+        .catch(err => {
+            $('#hyplan-add-line-status').text('Error: ' + err.message)
+        })
+    })
+
+    // --- Flight Patterns ---
+    $('#hyplan-set-pattern-center-btn').on('click', function () {
+        patternCenterMode = true
+        patternCenter = null
+        $('#hyplan-set-pattern-center-btn').hide()
+        $('#hyplan-cancel-pattern-btn').show()
+        $('#hyplan-pattern-status').text('Click the map to set the pattern center.')
+        Map_.map.on('click', onPatternCenterClick)
+    })
+
+    $('#hyplan-cancel-pattern-btn').on('click', function () {
+        patternCenterMode = false
+        patternCenter = null
+        Map_.map.off('click', onPatternCenterClick)
+        $('#hyplan-cancel-pattern-btn').hide()
+        $('#hyplan-set-pattern-center-btn').show()
+        $('#hyplan-pattern-status').text('')
+        $('#hyplan-generate-pattern-btn').prop('disabled', true)
+    })
+
+    function onPatternCenterClick(e) {
+        patternCenter = e.latlng
+        patternCenterMode = false
+        Map_.map.off('click', onPatternCenterClick)
+        $('#hyplan-cancel-pattern-btn').hide()
+        $('#hyplan-set-pattern-center-btn').show()
+        $('#hyplan-generate-pattern-btn').prop('disabled', false)
+        $('#hyplan-pattern-status').text(`Center: (${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)})`)
+    }
+
+    $('#hyplan-generate-pattern-btn').on('click', function () {
+        if (!patternCenter) return
+
+        const pattern = $('#hyplan-pattern-type').val()
+        const heading = parseFloat($('#hyplan-pattern-heading').val()) || 0
+        const altitude = parseFloat($('#hyplan-altitude').val()) || 3000
+        const legLength = parseFloat($('#hyplan-pattern-leg-length').val()) || 10000
+        const radius = parseFloat($('#hyplan-pattern-radius').val()) || 5000
+        const name = $('#hyplan-campaign-name').val() || 'Mission'
+
+        const bounds = Map_.map.getBounds()
+        const campaignBounds = [
+            bounds.getWest(), bounds.getSouth(),
+            bounds.getEast(), bounds.getNorth(),
+        ]
+
+        $('#hyplan-pattern-status').text('Generating...')
+        $('#hyplan-generate-pattern-btn').prop('disabled', true)
+
+        fetch(`${SERVICE_URL}/generate-pattern`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                campaign_id: campaignId || 'campaign-' + Date.now(),
+                campaign_name: name,
+                campaign_bounds: campaignBounds,
+                pattern: pattern,
+                center_lat: patternCenter.lat,
+                center_lon: patternCenter.lng,
+                heading: heading,
+                altitude_msl_m: altitude,
+                params: {
+                    leg_length_m: legLength,
+                    radius_m: radius,
+                    n_legs: 2,
+                    n_lines: 4,
+                    n_sides: 4,
+                    n_cycles: 2,
+                    n_turns: 3,
+                },
+            }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail || data.message) {
+                $('#hyplan-pattern-status').text('Error: ' + getErrorMessage(data))
+                return
+            }
+            campaignId = data.campaign_id
+            // Display pattern on map
+            if (patternLayer) Map_.map.removeLayer(patternLayer)
+            patternLayer = window.L.geoJSON(data.waypoints, {
+                style: { color: '#f59e0b', weight: 3, opacity: 0.9, dashArray: '5 5' },
+                pointToLayer: function (feature, latlng) {
+                    return window.L.circleMarker(latlng, {
+                        radius: 5, fillColor: '#f59e0b', color: '#fff',
+                        weight: 1, opacity: 1, fillOpacity: 0.8,
+                    })
+                },
+                onEachFeature: function (feature, layer) {
+                    if (feature.properties.name) {
+                        layer.bindTooltip(feature.properties.name, { sticky: true })
+                    }
+                },
+            }).addTo(Map_.map)
+            $('#hyplan-pattern-status').text(`Generated ${data.waypoint_count} waypoints (${pattern}).`)
+        })
+        .catch(err => {
+            $('#hyplan-pattern-status').text('Error: ' + err.message)
+        })
+        .finally(() => {
+            $('#hyplan-generate-pattern-btn').prop('disabled', false)
+        })
+    })
+
     function separateFromMMGIS() {
         if (flightLineLayer) {
             Map_.map.removeLayer(flightLineLayer)
@@ -531,6 +769,10 @@ function interfaceWithMMGIS() {
         if (windLayer) {
             Map_.map.removeLayer(windLayer)
             windLayer = null
+        }
+        if (patternLayer) {
+            Map_.map.removeLayer(patternLayer)
+            patternLayer = null
         }
         campaignId = null
         selectedLineIds = []
@@ -712,6 +954,7 @@ function updateSelectionStatus() {
     $('#hyplan-selection-status').text(`${selected} of ${total} selected`)
     $('#hyplan-compute-btn').prop('disabled', selected === 0)
     $('#hyplan-optimize-btn').prop('disabled', selected < 2)
+    $('#hyplan-delete-line-btn').prop('disabled', selected === 0)
 }
 
 function getErrorMessage(data) {
