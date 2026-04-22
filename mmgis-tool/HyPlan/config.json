@@ -1,0 +1,31 @@
+{
+    "defaultIcon": "airplane",
+    "description": "Flight line planning with HyPlan.",
+    "descriptionFull": {
+        "title": "The HyPlan tool generates flight lines from drawn polygons, optimizes line ordering, computes flight plans, and exports to KML/GPX."
+    },
+    "hasVars": true,
+    "name": "HyPlan",
+    "toolbarPriority": 900,
+    "paths": {
+        "HyPlanTool": "essence/Tools/HyPlan/HyPlanTool"
+    },
+    "expandable": true,
+    "config": {
+        "rows": [
+            {
+                "name": "HyPlan Service",
+                "components": [
+                    {
+                        "field": "variables.serviceUrl",
+                        "name": "Service URL",
+                        "description": "URL of the HyPlan service API",
+                        "type": "text",
+                        "width": 6,
+                        "default": "http://localhost:8100"
+                    }
+                ]
+            }
+        ]
+    }
+}

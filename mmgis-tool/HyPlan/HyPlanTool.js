@@ -1,0 +1,550 @@
+import $ from 'jquery'
+import F_ from '../../Basics/Formulae_/Formulae_'
+import L_ from '../../Basics/Layers_/Layers_'
+import Map_ from '../../Basics/Map_/Map_'
+import './HyPlanTool.css'
+
+// Default service URL (can be overridden in config)
+let SERVICE_URL = 'http://localhost:8100'
+
+// State
+let campaignId = null
+let drawnPolygon = null
+let flightLineLayer = null
+let planLayer = null
+let selectedLineIds = []
+
+const markup = `
+<div id="hyplanTool">
+    <h3>HyPlan Flight Planner</h3>
+
+    <div class="hyplan-section">
+        <h3>1. Campaign</h3>
+        <label>Campaign Name</label>
+        <input type="text" id="hyplan-campaign-name" value="Mission" />
+        <label>Aircraft</label>
+        <select id="hyplan-aircraft">
+            <option value="KingAirB200" selected>Loading...</option>
+        </select>
+        <label>Sensor</label>
+        <select id="hyplan-sensor">
+            <option value="AVIRIS3" selected>Loading...</option>
+        </select>
+        <label>Takeoff Airport (ICAO)</label>
+        <input type="text" id="hyplan-takeoff-airport" value="" placeholder="e.g. KPMD" />
+        <label>Return Airport (ICAO, blank = same as takeoff)</label>
+        <input type="text" id="hyplan-return-airport" value="" placeholder="" />
+        <label>Wind</label>
+        <select id="hyplan-wind-kind">
+            <option value="still_air" selected>Still Air</option>
+            <option value="constant">Constant Wind</option>
+        </select>
+        <div id="hyplan-wind-params" style="display:none">
+            <label>Wind Speed (kt)</label>
+            <input type="number" id="hyplan-wind-speed" value="0" />
+            <label>Wind Direction (deg from)</label>
+            <input type="number" id="hyplan-wind-direction" value="0" />
+        </div>
+    </div>
+
+    <div class="hyplan-section">
+        <h3>2. Generate Flight Lines</h3>
+        <p style="font-size:11px; color:var(--color-c)">Draw a polygon on the map using the Draw tool, then click Generate.</p>
+        <label>Altitude (m MSL)</label>
+        <input type="number" id="hyplan-altitude" value="3000" />
+        <label>Overlap (%)</label>
+        <input type="number" id="hyplan-overlap" value="20" />
+        <label>Azimuth (blank = auto)</label>
+        <input type="text" id="hyplan-azimuth" value="" />
+        <button id="hyplan-generate-btn">Generate Flight Box</button>
+        <div id="hyplan-generate-status" class="hyplan-status"></div>
+    </div>
+
+    <div class="hyplan-section">
+        <h3>3. Select & Order Lines</h3>
+        <button id="hyplan-select-all-btn">Select All</button>
+        <button id="hyplan-clear-selection-btn">Clear</button>
+        <button id="hyplan-optimize-btn" disabled>Optimize Order</button>
+        <div id="hyplan-line-list" class="hyplan-line-list"></div>
+        <div id="hyplan-selection-status" class="hyplan-status"></div>
+        <div id="hyplan-optimize-status" class="hyplan-status"></div>
+    </div>
+
+    <div class="hyplan-section">
+        <h3>4. Compute Flight Plan</h3>
+        <button id="hyplan-compute-btn" disabled>Compute Plan</button>
+        <div id="hyplan-compute-status" class="hyplan-status"></div>
+        <div id="hyplan-summary"></div>
+    </div>
+
+    <div class="hyplan-section">
+        <h3>5. Export</h3>
+        <button id="hyplan-export-btn" disabled>Export KML + GPX</button>
+        <div id="hyplan-export-status" class="hyplan-status"></div>
+        <div id="hyplan-download-links"></div>
+    </div>
+</div>
+`
+
+const HyPlanTool = {
+    height: 0,
+    width: 320,
+    MMGISInterface: null,
+    make: function () {
+        this.MMGISInterface = new interfaceWithMMGIS()
+    },
+    destroy: function () {
+        this.MMGISInterface.separateFromMMGIS()
+    },
+    getUrlString: function () {
+        return ''
+    },
+}
+
+function interfaceWithMMGIS() {
+    this.separateFromMMGIS = function () {
+        separateFromMMGIS()
+    }
+
+    const toolsContainer = $('#toolPanel')
+    toolsContainer.css('background', 'var(--color-k)')
+    toolsContainer.empty()
+    toolsContainer.html('<div style="height: 100%">' + markup + '</div>')
+
+    // Wind kind toggle
+    $('#hyplan-wind-kind').on('change', function () {
+        if ($(this).val() === 'constant') {
+            $('#hyplan-wind-params').show()
+        } else {
+            $('#hyplan-wind-params').hide()
+        }
+    })
+
+    // Read service URL from config if available
+    try {
+        const vars = L_.configData.tools.find(t => t.name === 'HyPlan')
+        if (vars && vars.variables && vars.variables.serviceUrl) {
+            SERVICE_URL = vars.variables.serviceUrl
+        }
+    } catch (e) { /* use default */ }
+
+    // Load aircraft and sensor lists from service
+    fetch(`${SERVICE_URL}/aircraft`)
+        .then(r => r.json())
+        .then(data => {
+            const sel = $('#hyplan-aircraft')
+            sel.empty()
+            data.aircraft.forEach(name => {
+                const selected = name === 'KingAirB200' ? ' selected' : ''
+                sel.append(`<option value="${name}"${selected}>${name}</option>`)
+            })
+        })
+        .catch(() => {})
+
+    fetch(`${SERVICE_URL}/sensors`)
+        .then(r => r.json())
+        .then(data => {
+            const sel = $('#hyplan-sensor')
+            sel.empty()
+            data.sensors.forEach(name => {
+                const selected = name === 'AVIRIS3' ? ' selected' : ''
+                sel.append(`<option value="${name}"${selected}>${name}</option>`)
+            })
+        })
+        .catch(() => {})
+
+    // Reset state
+    campaignId = null
+    selectedLineIds = []
+
+    // Get map bounds for campaign
+    const bounds = Map_.map.getBounds()
+    const campaignBounds = [
+        bounds.getWest(),
+        bounds.getSouth(),
+        bounds.getEast(),
+        bounds.getNorth(),
+    ]
+
+    // --- Generate button ---
+    $('#hyplan-generate-btn').on('click', function () {
+        const polygon = getDrawnPolygon()
+        if (!polygon) {
+            $('#hyplan-generate-status').text('Draw a polygon on the map first (use the Draw tool).')
+            return
+        }
+
+        const sensor = $('#hyplan-sensor').val()
+        const altitude = parseFloat($('#hyplan-altitude').val()) || 3000
+        const overlap = parseFloat($('#hyplan-overlap').val()) || 20
+        const azimuthText = $('#hyplan-azimuth').val().trim()
+        const azimuth = azimuthText ? parseFloat(azimuthText) : null
+        const name = $('#hyplan-campaign-name').val() || 'Mission'
+
+        $('#hyplan-generate-status').text('Generating...')
+        $('#hyplan-generate-btn').prop('disabled', true)
+
+        fetch(`${SERVICE_URL}/generate-lines`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                campaign_id: campaignId || 'campaign-' + Date.now(),
+                campaign_name: name,
+                campaign_bounds: campaignBounds,
+                generator: {
+                    kind: 'box_around_polygon',
+                    params: {
+                        sensor: sensor,
+                        altitude_msl_m: altitude,
+                        overlap_pct: overlap,
+                        azimuth: azimuth,
+                        box_name: name,
+                    },
+                },
+                geometry: polygon,
+            }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail) {
+                $('#hyplan-generate-status').text('Error: ' + data.detail)
+                return
+            }
+            campaignId = data.campaign_id
+            displayFlightLines(data.flight_lines)
+            updateLineList(data.flight_lines)
+            $('#hyplan-generate-status').text(
+                `Generated ${data.summary.line_count} flight lines.`
+            )
+        })
+        .catch(err => {
+            $('#hyplan-generate-status').text('Error: ' + err.message)
+        })
+        .finally(() => {
+            $('#hyplan-generate-btn').prop('disabled', false)
+        })
+    })
+
+    // --- Select All / Clear ---
+    $('#hyplan-select-all-btn').on('click', function () {
+        $('.hyplan-line-item').addClass('selected')
+        selectedLineIds = []
+        $('.hyplan-line-item').each(function () {
+            selectedLineIds.push($(this).data('lineid'))
+        })
+        updateSelectionStatus()
+    })
+
+    $('#hyplan-clear-selection-btn').on('click', function () {
+        $('.hyplan-line-item').removeClass('selected')
+        selectedLineIds = []
+        updateSelectionStatus()
+    })
+
+    // --- Optimize button ---
+    $('#hyplan-optimize-btn').on('click', function () {
+        if (!campaignId || selectedLineIds.length < 2) {
+            $('#hyplan-optimize-status').text('Select at least 2 lines to optimize.')
+            return
+        }
+
+        const aircraft = $('#hyplan-aircraft').val()
+        const takeoffAirport = $('#hyplan-takeoff-airport').val().trim().toUpperCase()
+        if (!takeoffAirport) {
+            $('#hyplan-optimize-status').text('Set a takeoff airport first.')
+            return
+        }
+        const returnAirport = $('#hyplan-return-airport').val().trim().toUpperCase() || takeoffAirport
+
+        $('#hyplan-optimize-status').text('Optimizing...')
+        $('#hyplan-optimize-btn').prop('disabled', true)
+
+        fetch(`${SERVICE_URL}/optimize-sequence`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                campaign_id: campaignId,
+                line_ids: selectedLineIds,
+                aircraft: aircraft,
+                takeoff_airport: takeoffAirport,
+                return_airport: returnAirport,
+            }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail) {
+                $('#hyplan-optimize-status').text('Error: ' + data.detail)
+                return
+            }
+            // Apply the optimized order
+            selectedLineIds = data.proposed_sequence.map(e => e.line_id)
+            // Update the list UI to reflect new order
+            const list = $('#hyplan-line-list')
+            selectedLineIds.forEach(lid => {
+                const item = $(`.hyplan-line-item[data-lineid="${lid}"]`)
+                item.addClass('selected')
+                list.append(item)
+            })
+            updateSelectionStatus()
+            const time = data.total_time ? ` (${(data.total_time * 60).toFixed(0)} min)` : ''
+            $('#hyplan-optimize-status').text(
+                `Optimized: ${data.lines_covered} lines${time}.` +
+                (data.lines_skipped.length > 0 ? ` Skipped: ${data.lines_skipped.join(', ')}` : '')
+            )
+        })
+        .catch(err => {
+            $('#hyplan-optimize-status').text('Error: ' + err.message)
+        })
+        .finally(() => {
+            $('#hyplan-optimize-btn').prop('disabled', false)
+        })
+    })
+
+    // --- Compute button ---
+    $('#hyplan-compute-btn').on('click', function () {
+        if (!campaignId || selectedLineIds.length === 0) {
+            $('#hyplan-compute-status').text('Select at least one flight line.')
+            return
+        }
+
+        const aircraft = $('#hyplan-aircraft').val()
+        const sequence = selectedLineIds.map(lid => ({
+            kind: 'line',
+            line_id: lid,
+        }))
+
+        // Build wind config
+        const windKind = $('#hyplan-wind-kind').val()
+        let wind = { kind: windKind }
+        if (windKind === 'constant') {
+            wind.speed_kt = parseFloat($('#hyplan-wind-speed').val()) || 0
+            wind.direction_deg = parseFloat($('#hyplan-wind-direction').val()) || 0
+        }
+
+        // Airports
+        const takeoffAirport = $('#hyplan-takeoff-airport').val().trim().toUpperCase() || null
+        const returnAirport = $('#hyplan-return-airport').val().trim().toUpperCase() || takeoffAirport
+
+        $('#hyplan-compute-status').text('Computing...')
+        $('#hyplan-compute-btn').prop('disabled', true)
+
+        fetch(`${SERVICE_URL}/compute-plan`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                campaign_id: campaignId,
+                sequence: sequence,
+                aircraft: aircraft,
+                wind: wind,
+                takeoff_airport: takeoffAirport,
+                return_airport: returnAirport,
+            }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail) {
+                $('#hyplan-compute-status').text('Error: ' + data.detail)
+                return
+            }
+            displayPlan(data.segments)
+            const s = data.summary
+            $('#hyplan-summary').html(
+                `<b>Segments:</b> ${s.segments}<br>` +
+                `<b>Distance:</b> ${s.total_distance_nm.toFixed(1)} nm<br>` +
+                `<b>Time:</b> ${s.total_time_min.toFixed(1)} min`
+            )
+            $('#hyplan-compute-status').text('Plan computed.')
+            $('#hyplan-export-btn').prop('disabled', false)
+        })
+        .catch(err => {
+            $('#hyplan-compute-status').text('Error: ' + err.message)
+        })
+        .finally(() => {
+            $('#hyplan-compute-btn').prop('disabled', false)
+        })
+    })
+
+    // --- Export button ---
+    $('#hyplan-export-btn').on('click', function () {
+        if (!campaignId) return
+
+        $('#hyplan-export-status').text('Exporting...')
+
+        fetch(`${SERVICE_URL}/export`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                campaign_id: campaignId,
+                formats: ['kml', 'gpx'],
+            }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail) {
+                $('#hyplan-export-status').text('Error: ' + data.detail)
+                return
+            }
+            const count = data.artifacts.length
+            $('#hyplan-export-status').text(`Exported ${count} file(s).`)
+            const links = $('#hyplan-download-links')
+            links.empty()
+            data.artifacts.forEach(a => {
+                if (a.download_url) {
+                    links.append(
+                        `<a href="${SERVICE_URL}${a.download_url}" target="_blank" ` +
+                        `style="display:block; color:#60a5fa; margin:2px 0; font-size:12px;">` +
+                        `Download ${a.filename}</a>`
+                    )
+                }
+            })
+        })
+        .catch(err => {
+            $('#hyplan-export-status').text('Error: ' + err.message)
+        })
+    })
+
+    function separateFromMMGIS() {
+        if (flightLineLayer) {
+            Map_.map.removeLayer(flightLineLayer)
+            flightLineLayer = null
+        }
+        if (planLayer) {
+            Map_.map.removeLayer(planLayer)
+            planLayer = null
+        }
+        campaignId = null
+        selectedLineIds = []
+    }
+}
+
+// --- Helper functions ---
+
+function getDrawnPolygon() {
+    // Try to get the most recently drawn polygon from the Draw tool's layers
+    let polygon = null
+    Map_.map.eachLayer(function (layer) {
+        if (layer.feature && layer.feature.geometry &&
+            (layer.feature.geometry.type === 'Polygon' ||
+             layer.feature.geometry.type === 'MultiPolygon')) {
+            polygon = layer.feature
+        }
+        // Also check for Leaflet drawn polygons
+        if (layer instanceof window.L.Polygon && !(layer instanceof window.L.Rectangle) && layer.toGeoJSON) {
+            polygon = layer.toGeoJSON()
+        }
+        if (layer instanceof window.L.Rectangle && layer.toGeoJSON) {
+            polygon = layer.toGeoJSON()
+        }
+    })
+    return polygon
+}
+
+function displayFlightLines(geojson) {
+    if (flightLineLayer) {
+        Map_.map.removeLayer(flightLineLayer)
+    }
+    flightLineLayer = window.L.geoJSON(geojson, {
+        interactive: true,
+        style: function (feature) {
+            return {
+                color: '#3b82f6',
+                weight: 4,
+                opacity: 0.8,
+            }
+        },
+        onEachFeature: function (feature, layer) {
+            const name = feature.properties.site_name || feature.properties.line_id
+            layer.bindTooltip(name, { sticky: true })
+            layer.on('click', function () {
+                const lineId = feature.properties.line_id || feature.id
+                toggleLineSelection(lineId)
+            })
+        },
+    }).addTo(Map_.map)
+}
+
+function displayPlan(geojson) {
+    if (planLayer) {
+        Map_.map.removeLayer(planLayer)
+    }
+    const segmentColors = {
+        takeoff: '#ef4444',
+        climb: '#f97316',
+        transit: '#6b7280',
+        descent: '#3b82f6',
+        flight_line: '#22c55e',
+        approach: '#8b5cf6',
+    }
+    planLayer = window.L.geoJSON(geojson, {
+        style: function (feature) {
+            const segType = feature.properties.segment_type || 'transit'
+            return {
+                color: segmentColors[segType] || '#6b7280',
+                weight: 3,
+                opacity: 0.9,
+                dashArray: segType === 'transit' ? '5 5' : null,
+            }
+        },
+        onEachFeature: function (feature, layer) {
+            const p = feature.properties
+            layer.bindTooltip(
+                `${p.segment_type}: ${p.segment_name || ''}`,
+                { sticky: true }
+            )
+        },
+    }).addTo(Map_.map)
+}
+
+function updateLineList(geojson) {
+    const list = $('#hyplan-line-list')
+    list.empty()
+    selectedLineIds = []
+
+    geojson.features.forEach(function (f) {
+        const lineId = f.properties.line_id || f.id
+        const name = f.properties.site_name || lineId
+        const item = $('<div>')
+            .addClass('hyplan-line-item')
+            .attr('data-lineid', lineId)
+            .text(name)
+            .on('click', function () {
+                toggleLineSelection(lineId)
+            })
+        list.append(item)
+    })
+}
+
+function toggleLineSelection(lineId) {
+    const item = $(`.hyplan-line-item[data-lineid="${lineId}"]`)
+    const idx = selectedLineIds.indexOf(lineId)
+    if (idx >= 0) {
+        selectedLineIds.splice(idx, 1)
+        item.removeClass('selected')
+    } else {
+        selectedLineIds.push(lineId)
+        item.addClass('selected')
+    }
+    updateSelectionStatus()
+
+    // Update line colors on map
+    if (flightLineLayer) {
+        flightLineLayer.eachLayer(function (layer) {
+            const fLineId = layer.feature.properties.line_id || layer.feature.id
+            if (selectedLineIds.indexOf(fLineId) >= 0) {
+                layer.setStyle({ color: '#1d4ed8', weight: 4, opacity: 1.0 })
+            } else {
+                layer.setStyle({ color: '#3b82f6', weight: 2, opacity: 0.8 })
+            }
+        })
+    }
+}
+
+function updateSelectionStatus() {
+    const total = $('.hyplan-line-item').length
+    const selected = selectedLineIds.length
+    $('#hyplan-selection-status').text(`${selected} of ${total} selected`)
+    $('#hyplan-compute-btn').prop('disabled', selected === 0)
+    $('#hyplan-optimize-btn').prop('disabled', selected < 2)
+}
+
+export default HyPlanTool
