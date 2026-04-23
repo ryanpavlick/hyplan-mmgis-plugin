@@ -95,12 +95,7 @@ const markup = `
         </select>
         <label>Heading (deg)</label>
         <input type="number" id="hyplan-pattern-heading" value="0" />
-        <div id="hyplan-pattern-params">
-            <label>Leg Length (m)</label>
-            <input type="number" id="hyplan-pattern-leg-length" value="10000" />
-            <label>Radius (m)</label>
-            <input type="number" id="hyplan-pattern-radius" value="5000" />
-        </div>
+        <div id="hyplan-pattern-params"></div>
         <button id="hyplan-set-pattern-center-btn">Set Center on Map</button>
         <button id="hyplan-cancel-pattern-btn" style="display:none">Cancel</button>
         <button id="hyplan-generate-pattern-btn" disabled>Generate Pattern</button>
@@ -770,6 +765,56 @@ function interfaceWithMMGIS() {
     })
 
     // --- Flight Patterns ---
+    // --- Pattern parameter fields ---
+    const patternFields = {
+        racetrack: [
+            { id: 'pp-leg-length', label: 'Leg Length (m)', value: 10000 },
+            { id: 'pp-n-legs', label: 'Number of Legs', value: 2 },
+            { id: 'pp-offset', label: 'Leg Spacing (m)', value: 1000 },
+        ],
+        rosette: [
+            { id: 'pp-radius', label: 'Radius (m)', value: 5000 },
+            { id: 'pp-n-lines', label: 'Number of Lines', value: 3 },
+        ],
+        polygon: [
+            { id: 'pp-radius', label: 'Radius (m)', value: 5000 },
+            { id: 'pp-n-sides', label: 'Number of Sides', value: 4 },
+            { id: 'pp-aspect-ratio', label: 'Aspect Ratio', value: 1.0 },
+        ],
+        sawtooth: [
+            { id: 'pp-leg-length', label: 'Leg Length (m)', value: 10000 },
+            { id: 'pp-alt-min', label: 'Altitude Min (m)', value: 1000 },
+            { id: 'pp-alt-max', label: 'Altitude Max (m)', value: 3000 },
+            { id: 'pp-n-cycles', label: 'Number of Cycles', value: 2 },
+        ],
+        spiral: [
+            { id: 'pp-radius', label: 'Radius (m)', value: 3000 },
+            { id: 'pp-alt-start', label: 'Altitude Start (m)', value: 500 },
+            { id: 'pp-alt-end', label: 'Altitude End (m)', value: 3000 },
+            { id: 'pp-n-turns', label: 'Number of Turns', value: 3 },
+            { id: 'pp-direction', label: 'Direction (right/left)', value: 'right', type: 'text' },
+        ],
+    }
+
+    function renderPatternParams(pattern) {
+        const container = $('#hyplan-pattern-params')
+        container.empty()
+        const fields = patternFields[pattern] || []
+        fields.forEach(f => {
+            const inputType = f.type || 'number'
+            container.append(
+                `<label>${f.label}</label>` +
+                `<input type="${inputType}" id="${f.id}" value="${f.value}" />`
+            )
+        })
+    }
+
+    renderPatternParams('racetrack')
+
+    $('#hyplan-pattern-type').on('change', function () {
+        renderPatternParams($(this).val())
+    })
+
     $('#hyplan-set-pattern-center-btn').on('click', function () {
         patternCenterMode = true
         patternCenter = null
@@ -805,9 +850,32 @@ function interfaceWithMMGIS() {
         const pattern = $('#hyplan-pattern-type').val()
         const heading = parseFloat($('#hyplan-pattern-heading').val()) || 0
         const altitude = parseFloat($('#hyplan-altitude').val()) || 3000
-        const legLength = parseFloat($('#hyplan-pattern-leg-length').val()) || 10000
-        const radius = parseFloat($('#hyplan-pattern-radius').val()) || 5000
         const name = $('#hyplan-campaign-name').val() || 'Mission'
+
+        // Read dynamic pattern parameters
+        const pp = {}
+        const fields = patternFields[pattern] || []
+        fields.forEach(f => {
+            const raw = $(`#${f.id}`).val()
+            pp[f.id] = f.type === 'text' ? raw : (parseFloat(raw) || f.value)
+        })
+
+        // Map UI field IDs to service param names
+        const params = {}
+        if (pp['pp-leg-length'] !== undefined) params.leg_length_m = pp['pp-leg-length']
+        if (pp['pp-radius'] !== undefined) params.radius_m = pp['pp-radius']
+        if (pp['pp-n-legs'] !== undefined) params.n_legs = pp['pp-n-legs']
+        if (pp['pp-offset'] !== undefined) params.offset_m = pp['pp-offset']
+        if (pp['pp-n-lines'] !== undefined) params.n_lines = pp['pp-n-lines']
+        if (pp['pp-n-sides'] !== undefined) params.n_sides = pp['pp-n-sides']
+        if (pp['pp-aspect-ratio'] !== undefined) params.aspect_ratio = pp['pp-aspect-ratio']
+        if (pp['pp-alt-min'] !== undefined) params.altitude_min_m = pp['pp-alt-min']
+        if (pp['pp-alt-max'] !== undefined) params.altitude_max_m = pp['pp-alt-max']
+        if (pp['pp-n-cycles'] !== undefined) params.n_cycles = pp['pp-n-cycles']
+        if (pp['pp-alt-start'] !== undefined) params.altitude_start_m = pp['pp-alt-start']
+        if (pp['pp-alt-end'] !== undefined) params.altitude_end_m = pp['pp-alt-end']
+        if (pp['pp-n-turns'] !== undefined) params.n_turns = pp['pp-n-turns']
+        if (pp['pp-direction'] !== undefined) params.direction = pp['pp-direction']
 
         const bounds = Map_.map.getBounds()
         const campaignBounds = [
@@ -830,15 +898,7 @@ function interfaceWithMMGIS() {
                 center_lon: patternCenter.lng,
                 heading: heading,
                 altitude_msl_m: altitude,
-                params: {
-                    leg_length_m: legLength,
-                    radius_m: radius,
-                    n_legs: 2,
-                    n_lines: 4,
-                    n_sides: 4,
-                    n_cycles: 2,
-                    n_turns: 3,
-                },
+                params: params,
             }),
         })
         .then(r => r.json())

@@ -1005,7 +1005,8 @@ def generate_pattern(req: PatternRequest):
                 heading=req.heading,
                 altitude=altitude,
                 radius=params.get("radius_m", 5000) * ureg.meter,
-                n_sides=params.get("n_sides", 4),
+                n_sides=int(params.get("n_sides", 4)),
+                aspect_ratio=float(params.get("aspect_ratio", 1.0)),
             )
         elif req.pattern == "sawtooth":
             waypoints = sawtooth(
@@ -1023,7 +1024,8 @@ def generate_pattern(req: PatternRequest):
                 altitude_start=params.get("altitude_start_m", 500) * ureg.meter,
                 altitude_end=params.get("altitude_end_m", 3000) * ureg.meter,
                 radius=params.get("radius_m", 3000) * ureg.meter,
-                n_turns=params.get("n_turns", 3),
+                n_turns=float(params.get("n_turns", 3)),
+                direction=str(params.get("direction", "right")),
             )
         else:
             raise HTTPException(status_code=400, detail=f"Unknown pattern: '{req.pattern}'")
