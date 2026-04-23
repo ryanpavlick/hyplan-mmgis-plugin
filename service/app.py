@@ -735,7 +735,7 @@ def imagery_layers():
 
 
 class AddLineRequest(BaseModel):
-    campaign_id: str
+    campaign_id: Optional[str] = None
     lat1: float
     lon1: float
     lat2: float
@@ -784,7 +784,18 @@ class PatternRequest(BaseModel):
 @app.post("/add-line")
 def add_line(req: AddLineRequest):
     """Add a single flight line to a campaign."""
-    campaign = _get_campaign(req.campaign_id)
+    if not req.campaign_id:
+        # Create a new campaign from the line's midpoint
+        mid_lat = (req.lat1 + req.lat2) / 2
+        mid_lon = (req.lon1 + req.lon2) / 2
+        bounds = [mid_lon - 1, mid_lat - 1, mid_lon + 1, mid_lat + 1]
+        campaign = _get_or_create_campaign(
+            'campaign-' + str(int(datetime.datetime.now().timestamp())),
+            req.site_name or 'Mission',
+            bounds,
+        )
+    else:
+        campaign = _get_campaign(req.campaign_id)
     line = FlightLine.from_endpoints(
         req.lat1, req.lon1, req.lat2, req.lon2,
         altitude_msl=req.altitude_msl_m * ureg.meter,
@@ -798,6 +809,7 @@ def add_line(req: AddLineRequest):
         "flight_lines": campaign.flight_lines_to_geojson(),
         "groups": campaign.groups,
         "added_line_id": campaign.flight_line_ids[-1],
+        "campaign_id": campaign.campaign_id,
         "revision": campaign.revision,
     }
 
@@ -858,11 +870,7 @@ def generate_pattern(req: PatternRequest):
         req.campaign_id, req.campaign_name, req.campaign_bounds,
     )
 
-    center = Waypoint(
-        latitude=req.center_lat, longitude=req.center_lon,
-        heading=req.heading,
-        altitude_msl=req.altitude_msl_m * ureg.meter,
-    )
+    center = (req.center_lat, req.center_lon)
     altitude = req.altitude_msl_m * ureg.meter
     params = req.params
 

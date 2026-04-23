@@ -607,6 +607,7 @@ function interfaceWithMMGIS() {
                 $('#hyplan-add-line-status').text('Error: ' + getErrorMessage(data))
                 return
             }
+            if (data.campaign_id) campaignId = data.campaign_id
             displayFlightLines(data.flight_lines)
             updateLineList(data.flight_lines)
             $('#hyplan-add-line-status').text(`Added line ${data.added_line_id}.`)
