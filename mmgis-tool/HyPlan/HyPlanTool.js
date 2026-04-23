@@ -125,6 +125,7 @@ const markup = `
             <option value="offset_across">Offset Across Track (m)</option>
             <option value="offset_along">Offset Along Track (m)</option>
             <option value="offset_north_east">Shift N/E (m)</option>
+            <option value="reverse">Reverse Direction</option>
         </select>
         <div id="hyplan-transform-params">
             <label id="hyplan-transform-label-1">Angle (deg)</label>
@@ -711,6 +712,12 @@ function interfaceWithMMGIS() {
             label1.text('North (m)')
             label2.text('East (m)')
             wrap2.show()
+        } else if (op === 'reverse') {
+            label1.text('')
+            $('#hyplan-transform-params').hide()
+        }
+        if (op !== 'reverse') {
+            $('#hyplan-transform-params').show()
         }
     })
 
@@ -729,6 +736,7 @@ function interfaceWithMMGIS() {
         else if (op === 'offset_across') params = { distance_m: val1 }
         else if (op === 'offset_along') params = { start_m: val1, end_m: val2 }
         else if (op === 'offset_north_east') params = { north_m: val1, east_m: val2 }
+        else if (op === 'reverse') params = {}
 
         $('#hyplan-transform-status').text('Applying...')
         $('#hyplan-transform-btn').prop('disabled', true)

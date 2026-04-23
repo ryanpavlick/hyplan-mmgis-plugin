@@ -772,7 +772,7 @@ class AddWaypointRequest(BaseModel):
 class TransformLinesRequest(BaseModel):
     campaign_id: str
     line_ids: list[str]
-    operation: str  # "rotate", "offset_across", "offset_along", "offset_north_east", "move_endpoint"
+    operation: str  # "rotate", "offset_across", "offset_along", "offset_north_east", "reverse", "move_endpoint"
     params: dict = Field(default_factory=dict)
     # rotate: {"angle_deg": float}
     # offset_across: {"distance_m": float}
@@ -915,6 +915,14 @@ def transform_lines(req: TransformLinesRequest):
                 if lid not in lines_by_id:
                     continue
                 new_line = lines_by_id[lid].offset_north_east(north, east)
+                campaign.replace_flight_line(lid, new_line)
+                transformed += 1
+
+        elif req.operation == "reverse":
+            for lid in req.line_ids:
+                if lid not in lines_by_id:
+                    continue
+                new_line = lines_by_id[lid].reverse()
                 campaign.replace_flight_line(lid, new_line)
                 transformed += 1
 
