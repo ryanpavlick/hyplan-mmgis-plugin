@@ -15,6 +15,7 @@ let planLayer = null
 let selectedLineIds = []
 let windLayer = null
 let patternLayer = null
+let patternWaypoints = []  // stored waypoints from last pattern generation
 let swathLayer = null
 let drawLineMode = false
 let drawLineStart = null
@@ -478,16 +479,21 @@ function interfaceWithMMGIS() {
 
     // --- Compute button ---
     $('#hyplan-compute-btn').on('click', function () {
-        if (!campaignId || selectedLineIds.length === 0) {
-            $('#hyplan-compute-status').text('Select at least one flight line.')
+        if (selectedLineIds.length === 0 && patternWaypoints.length === 0) {
+            $('#hyplan-compute-status').text('Select flight lines or generate a pattern first.')
             return
         }
 
         const aircraft = $('#hyplan-aircraft').val()
+        // Build sequence: selected flight lines + pattern waypoints
         const sequence = selectedLineIds.map(lid => ({
             kind: 'line',
             line_id: lid,
         }))
+        // Append pattern waypoints if any
+        if (patternWaypoints.length > 0) {
+            patternWaypoints.forEach(wp => sequence.push(wp))
+        }
 
         // Build wind config
         const windKind = $('#hyplan-wind-kind').val()
@@ -1004,7 +1010,19 @@ function interfaceWithMMGIS() {
                     }
                 },
             }).addTo(Map_.map)
-            $('#hyplan-pattern-status').text(`Generated ${data.waypoint_count} waypoints (${pattern}).`)
+            // Store waypoints for compute
+            patternWaypoints = []
+            data.waypoints.features.forEach(function (f) {
+                if (f.geometry.type === 'Point') {
+                    patternWaypoints.push({
+                        kind: 'waypoint',
+                        latitude: f.geometry.coordinates[1],
+                        longitude: f.geometry.coordinates[0],
+                        altitude_msl_m: f.properties.altitude_msl || parseFloat($('#hyplan-altitude').val()) || 3000,
+                    })
+                }
+            })
+            $('#hyplan-pattern-status').text(`Generated ${data.waypoint_count} waypoints (${pattern}). Will be included in compute.`)
         })
         .catch(err => {
             $('#hyplan-pattern-status').text('Error: ' + err.message)
@@ -1286,7 +1304,7 @@ function updateSelectionStatus() {
     const total = $('.hyplan-line-item').length
     const selected = selectedLineIds.length
     $('#hyplan-selection-status').text(`${selected} of ${total} selected`)
-    $('#hyplan-compute-btn').prop('disabled', selected === 0)
+    $('#hyplan-compute-btn').prop('disabled', selected === 0 && patternWaypoints.length === 0)
     $('#hyplan-optimize-btn').prop('disabled', selected < 2)
     $('#hyplan-delete-line-btn').prop('disabled', selected === 0)
     $('#hyplan-transform-btn').prop('disabled', selected === 0)

@@ -160,7 +160,7 @@ class SequenceEntry(BaseModel):
 
 
 class ComputePlanRequest(BaseModel):
-    campaign_id: str
+    campaign_id: Optional[str] = None
     sequence: list[SequenceEntry]
     aircraft: str
     wind: dict = Field(default_factory=lambda: {"kind": "still_air"})
@@ -418,11 +418,17 @@ def generate_lines(req: GenerateLinesRequest):
 def compute_plan(req: ComputePlanRequest):
     """Compute a flight plan from an ordered sequence."""
     warnings: list[str] = []
-    campaign = _get_campaign(req.campaign_id)
+    # Campaign is optional for waypoint-only sequences
+    campaign = None
+    lines_by_id = {}
+    if req.campaign_id:
+        try:
+            campaign = _get_campaign(req.campaign_id)
+            lines_by_id = dict(zip(campaign.flight_line_ids, campaign.flight_lines))
+        except HTTPException:
+            if any(e.kind == "line" for e in req.sequence):
+                raise  # Need campaign for line references
     aircraft = _make_aircraft(req.aircraft)
-
-    # Build flight sequence from entries
-    lines_by_id = dict(zip(campaign.flight_line_ids, campaign.flight_lines))
     flight_sequence = []
 
     for entry in req.sequence:
