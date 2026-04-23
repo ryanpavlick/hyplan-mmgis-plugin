@@ -15,6 +15,7 @@ let planLayer = null
 let selectedLineIds = []
 let windLayer = null
 let patternLayer = null
+let swathLayer = null
 let drawLineMode = false
 let drawLineStart = null
 let patternCenterMode = false
@@ -140,6 +141,13 @@ const markup = `
         <button id="hyplan-clear-plan-btn" style="display:none">Clear Plan</button>
         <div id="hyplan-compute-status" class="hyplan-status"></div>
         <div id="hyplan-summary"></div>
+    </div>
+
+    <div class="hyplan-section">
+        <h3>4b. Swath Display</h3>
+        <button id="hyplan-show-swaths-btn" disabled>Generate Swaths</button>
+        <button id="hyplan-hide-swaths-btn" style="display:none">Hide Swaths</button>
+        <div id="hyplan-swath-status" class="hyplan-status"></div>
     </div>
 
     <div class="hyplan-section">
@@ -550,6 +558,78 @@ function interfaceWithMMGIS() {
         $('#hyplan-export-status').text('')
         $('#hyplan-download-links').empty()
         $('#hyplan-clear-plan-btn').hide()
+    })
+
+    // --- Generate Swaths ---
+    $('#hyplan-show-swaths-btn').on('click', function () {
+        if (!campaignId || selectedLineIds.length === 0) {
+            $('#hyplan-swath-status').text('Select lines first.')
+            return
+        }
+        const sensor = $('#hyplan-sensor').val()
+        if (!sensor) {
+            $('#hyplan-swath-status').text('Select a sensor first.')
+            return
+        }
+        const altitude = parseFloat($('#hyplan-altitude').val()) || 3000
+
+        $('#hyplan-swath-status').text('Generating swaths...')
+        $('#hyplan-show-swaths-btn').prop('disabled', true)
+
+        fetch(`${SERVICE_URL}/generate-swaths`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                campaign_id: campaignId,
+                line_ids: selectedLineIds,
+                sensor: sensor,
+                altitude_msl_m: altitude,
+            }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail || data.message) {
+                $('#hyplan-swath-status').text('Error: ' + getErrorMessage(data))
+                return
+            }
+            if (swathLayer) Map_.map.removeLayer(swathLayer)
+            swathLayer = window.L.geoJSON(data.swaths, {
+                style: {
+                    color: '#8b5cf6',
+                    weight: 1,
+                    fillColor: '#8b5cf6',
+                    fillOpacity: 0.15,
+                },
+                onEachFeature: function (feature, layer) {
+                    layer.bindTooltip(feature.properties.site_name || '', { sticky: true })
+                },
+            }).addTo(Map_.map)
+
+            let status = `${data.count} swath(s) displayed.`
+            if (data.gap_overlap && data.gap_overlap.total_pairs > 0) {
+                status += ` Overlaps: ${data.gap_overlap.overlapping_pairs}, Gaps: ${data.gap_overlap.gap_pairs}`
+            }
+            $('#hyplan-swath-status').text(status)
+            $('#hyplan-show-swaths-btn').hide()
+            $('#hyplan-hide-swaths-btn').show()
+        })
+        .catch(err => {
+            $('#hyplan-swath-status').text('Error: ' + err.message)
+        })
+        .finally(() => {
+            $('#hyplan-show-swaths-btn').prop('disabled', false)
+        })
+    })
+
+    // --- Hide Swaths ---
+    $('#hyplan-hide-swaths-btn').on('click', function () {
+        if (swathLayer) {
+            Map_.map.removeLayer(swathLayer)
+            swathLayer = null
+        }
+        $('#hyplan-swath-status').text('')
+        $('#hyplan-hide-swaths-btn').hide()
+        $('#hyplan-show-swaths-btn').show()
     })
 
     // --- Export button ---
@@ -1014,6 +1094,10 @@ function interfaceWithMMGIS() {
             Map_.map.removeLayer(patternLayer)
             patternLayer = null
         }
+        if (swathLayer) {
+            Map_.map.removeLayer(swathLayer)
+            swathLayer = null
+        }
         campaignId = null
         selectedLineIds = []
     }
@@ -1196,6 +1280,7 @@ function updateSelectionStatus() {
     $('#hyplan-optimize-btn').prop('disabled', selected < 2)
     $('#hyplan-delete-line-btn').prop('disabled', selected === 0)
     $('#hyplan-transform-btn').prop('disabled', selected === 0)
+    $('#hyplan-show-swaths-btn').prop('disabled', selected === 0)
 }
 
 function getErrorMessage(data) {

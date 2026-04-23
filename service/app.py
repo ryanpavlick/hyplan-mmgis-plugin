@@ -793,6 +793,74 @@ class PatternRequest(BaseModel):
     params: dict = Field(default_factory=dict)
 
 
+class SwathRequest(BaseModel):
+    campaign_id: str
+    line_ids: list[str]
+    sensor: str
+    altitude_msl_m: float = 3000.0
+
+
+@app.post("/generate-swaths")
+def generate_swaths(req: SwathRequest):
+    """Generate swath footprint polygons for selected flight lines."""
+    from hyplan.swath import generate_swath_polygon, analyze_swath_gaps_overlaps
+    from shapely.geometry import mapping as shapely_mapping
+
+    campaign = _get_campaign(req.campaign_id)
+    lines_by_id = dict(zip(campaign.flight_line_ids, campaign.flight_lines))
+
+    try:
+        sensor = create_sensor(req.sensor)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid sensor: {exc}")
+
+    swath_polygons = []
+    features = []
+    warnings = []
+
+    for lid in req.line_ids:
+        if lid not in lines_by_id:
+            warnings.append(f"Unknown line_id: '{lid}'")
+            continue
+        line = lines_by_id[lid]
+        try:
+            poly = generate_swath_polygon(line, sensor)
+            swath_polygons.append(poly)
+            features.append({
+                "type": "Feature",
+                "geometry": shapely_mapping(poly),
+                "properties": {
+                    "line_id": lid,
+                    "site_name": line.site_name or lid,
+                },
+            })
+        except Exception as exc:
+            warnings.append(f"Swath failed for {lid}: {exc}")
+
+    # Analyze gaps/overlaps if multiple swaths
+    gap_overlap_info = {}
+    if len(swath_polygons) >= 2:
+        try:
+            df = analyze_swath_gaps_overlaps(swath_polygons)
+            gap_overlap_info = {
+                "total_pairs": len(df),
+                "overlapping_pairs": int((df["overlap_area_m2"] > 0).sum()) if "overlap_area_m2" in df.columns else 0,
+                "gap_pairs": int((df["gap_distance_m"] > 0).sum()) if "gap_distance_m" in df.columns else 0,
+            }
+        except Exception:
+            pass
+
+    return {
+        "swaths": {
+            "type": "FeatureCollection",
+            "features": features,
+        },
+        "count": len(features),
+        "gap_overlap": gap_overlap_info,
+        "warnings": warnings,
+    }
+
+
 @app.post("/add-line")
 def add_line(req: AddLineRequest):
     """Add a single flight line to a campaign."""
