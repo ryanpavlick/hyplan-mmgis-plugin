@@ -87,7 +87,15 @@ def _get_or_create_campaign(campaign_id: str, name: str, bounds: list[float]) ->
     """Get existing campaign or create a new one."""
     if campaign_id in _campaigns:
         return _campaigns[campaign_id]
-    campaign = Campaign(name=name, bounds=tuple(bounds))
+    # Ensure bounds have non-zero extent (add margin if degenerate)
+    min_lon, min_lat, max_lon, max_lat = bounds
+    if max_lon - min_lon < 0.01:
+        min_lon -= 0.5
+        max_lon += 0.5
+    if max_lat - min_lat < 0.01:
+        min_lat -= 0.5
+        max_lat += 0.5
+    campaign = Campaign(name=name, bounds=(min_lon, min_lat, max_lon, max_lat))
     _register_campaign(campaign, campaign_id)
     _persist_campaign(campaign)
     return campaign
