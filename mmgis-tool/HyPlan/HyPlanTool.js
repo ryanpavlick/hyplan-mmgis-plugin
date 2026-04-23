@@ -141,6 +141,7 @@ const markup = `
     <div class="hyplan-section">
         <h3>4. Compute Flight Plan</h3>
         <button id="hyplan-compute-btn" disabled>Compute Plan</button>
+        <button id="hyplan-clear-plan-btn" style="display:none">Clear Plan</button>
         <div id="hyplan-compute-status" class="hyplan-status"></div>
         <div id="hyplan-summary"></div>
     </div>
@@ -531,6 +532,7 @@ function interfaceWithMMGIS() {
             )
             $('#hyplan-compute-status').text('Plan computed.')
             $('#hyplan-export-btn').prop('disabled', false)
+            $('#hyplan-clear-plan-btn').show()
         })
         .catch(err => {
             $('#hyplan-compute-status').text('Error: ' + err.message)
@@ -538,6 +540,20 @@ function interfaceWithMMGIS() {
         .finally(() => {
             $('#hyplan-compute-btn').prop('disabled', false)
         })
+    })
+
+    // --- Clear Plan ---
+    $('#hyplan-clear-plan-btn').on('click', function () {
+        if (planLayer) {
+            Map_.map.removeLayer(planLayer)
+            planLayer = null
+        }
+        $('#hyplan-summary').empty()
+        $('#hyplan-compute-status').text('')
+        $('#hyplan-export-btn').prop('disabled', true)
+        $('#hyplan-export-status').text('')
+        $('#hyplan-download-links').empty()
+        $('#hyplan-clear-plan-btn').hide()
     })
 
     // --- Export button ---
