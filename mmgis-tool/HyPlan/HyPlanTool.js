@@ -1045,8 +1045,8 @@ function interfaceWithMMGIS() {
         }
 
         // Select all flight lines that intersect the box
-        if (flightLineLayer) {
-            flightLineLayer.eachLayer(function (layer) {
+        if (flightLineLayer && flightLineLayer.length > 0) {
+            flightLineLayer.forEach(function (layer) {
                 const lineId = layer.feature.properties.line_id || layer.feature.id
                 const coords = layer.getLatLngs()
                 let intersects = false
@@ -1079,7 +1079,7 @@ function interfaceWithMMGIS() {
             boxSelectRect = null
         }
         if (flightLineLayer) {
-            Map_.map.removeLayer(flightLineLayer)
+            flightLineLayer.forEach(function (l) { Map_.map.removeLayer(l) })
             flightLineLayer = null
         }
         if (planLayer) {
@@ -1126,37 +1126,43 @@ function getDrawnPolygon() {
 }
 
 function displayFlightLines(geojson) {
-    console.log('HyPlan: displayFlightLines called with', geojson.features ? geojson.features.length : 0, 'features')
-    console.log('HyPlan: Map_.map exists:', !!Map_.map, 'window.L exists:', !!window.L)
     if (flightLineLayer) {
-        Map_.map.removeLayer(flightLineLayer)
+        flightLineLayer.forEach(function (l) { Map_.map.removeLayer(l) })
     }
-    flightLineLayer = window.L.geoJSON(geojson, {
-        interactive: true,
-        style: function (feature) {
-            return {
-                color: '#3b82f6',
-                weight: 4,
-                opacity: 0.8,
-            }
-        },
-        onEachFeature: function (feature, layer) {
-            const name = feature.properties.site_name || feature.properties.line_id
-            layer.bindTooltip(name, { sticky: true })
-            layer.on('click', function () {
-                const lineId = feature.properties.line_id || feature.id
-                toggleLineSelection(lineId)
-            })
-        },
-    }).addTo(Map_.map)
+    flightLineLayer = []
 
-    // Zoom map to show all lines
-    try {
-        const layerBounds = flightLineLayer.getBounds()
-        if (layerBounds.isValid()) {
-            Map_.map.fitBounds(layerBounds, { padding: [20, 20] })
-        }
-    } catch (e) { /* ignore */ }
+    var allLatLngs = []
+    geojson.features.forEach(function (f) {
+        if (f.geometry.type !== 'LineString') return
+        var coords = f.geometry.coordinates
+        // GeoJSON is [lon, lat], Leaflet wants [lat, lon]
+        var latlngs = coords.map(function (c) { return [c[1], c[0]] })
+        allLatLngs = allLatLngs.concat(latlngs)
+
+        var lineId = f.properties.line_id || f.id
+        var name = f.properties.site_name || lineId
+
+        var polyline = window.L.polyline(latlngs, {
+            color: '#3b82f6',
+            weight: 4,
+            opacity: 0.8,
+            interactive: true,
+        }).addTo(Map_.map)
+
+        polyline.feature = f
+        polyline.bindTooltip(name, { sticky: true })
+        polyline.on('click', function () {
+            toggleLineSelection(lineId)
+        })
+
+        flightLineLayer.push(polyline)
+    })
+
+    // Zoom to show all lines
+    if (allLatLngs.length > 0) {
+        var bounds = window.L.latLngBounds(allLatLngs)
+        Map_.map.fitBounds(bounds, { padding: [20, 20] })
+    }
 }
 
 function displayPlan(geojson) {
@@ -1270,13 +1276,13 @@ function toggleLineSelection(lineId) {
     updateSelectionStatus()
 
     // Update line colors on map
-    if (flightLineLayer) {
-        flightLineLayer.eachLayer(function (layer) {
+    if (flightLineLayer && flightLineLayer.length > 0) {
+        flightLineLayer.forEach(function (layer) {
             const fLineId = layer.feature.properties.line_id || layer.feature.id
             if (selectedLineIds.indexOf(fLineId) >= 0) {
                 layer.setStyle({ color: '#1d4ed8', weight: 4, opacity: 1.0 })
             } else {
-                layer.setStyle({ color: '#3b82f6', weight: 2, opacity: 0.8 })
+                layer.setStyle({ color: '#3b82f6', weight: 4, opacity: 0.8 })
             }
         })
     }
