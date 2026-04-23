@@ -1126,6 +1126,8 @@ function getDrawnPolygon() {
 }
 
 function displayFlightLines(geojson) {
+    console.log('HyPlan: displayFlightLines called with', geojson.features ? geojson.features.length : 0, 'features')
+    console.log('HyPlan: Map_.map exists:', !!Map_.map, 'window.L exists:', !!window.L)
     if (flightLineLayer) {
         Map_.map.removeLayer(flightLineLayer)
     }
@@ -1147,6 +1149,14 @@ function displayFlightLines(geojson) {
             })
         },
     }).addTo(Map_.map)
+
+    // Zoom map to show all lines
+    try {
+        const layerBounds = flightLineLayer.getBounds()
+        if (layerBounds.isValid()) {
+            Map_.map.fitBounds(layerBounds, { padding: [20, 20] })
+        }
+    } catch (e) { /* ignore */ }
 }
 
 function displayPlan(geojson) {
