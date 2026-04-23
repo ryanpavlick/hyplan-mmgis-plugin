@@ -769,6 +769,18 @@ class AddWaypointRequest(BaseModel):
     name: Optional[str] = None
 
 
+class TransformLinesRequest(BaseModel):
+    campaign_id: str
+    line_ids: list[str]
+    operation: str  # "rotate", "offset_across", "offset_along", "offset_north_east", "move_endpoint"
+    params: dict = Field(default_factory=dict)
+    # rotate: {"angle_deg": float}
+    # offset_across: {"distance_m": float}
+    # offset_along: {"start_m": float, "end_m": float}
+    # offset_north_east: {"north_m": float, "east_m": float}
+    # move_endpoint: {"line_id": str, "endpoint": "start"|"end", "lat": float, "lon": float}
+
+
 class PatternRequest(BaseModel):
     campaign_id: str
     campaign_name: str = "Mission"
@@ -855,6 +867,93 @@ def delete_line(req: DeleteLineRequest):
     return {
         "flight_lines": campaign.flight_lines_to_geojson(),
         "groups": campaign.groups,
+        "revision": campaign.revision,
+    }
+
+
+@app.post("/transform-lines")
+def transform_lines(req: TransformLinesRequest):
+    """Apply a geometric transform to one or more flight lines."""
+    campaign = _get_campaign(req.campaign_id)
+    lines_by_id = dict(zip(campaign.flight_line_ids, campaign.flight_lines))
+    params = req.params
+    transformed = 0
+
+    try:
+        if req.operation == "rotate":
+            angle = float(params.get("angle_deg", 0))
+            for lid in req.line_ids:
+                if lid not in lines_by_id:
+                    continue
+                new_line = lines_by_id[lid].rotate_around_midpoint(angle)
+                campaign.replace_flight_line(lid, new_line)
+                transformed += 1
+
+        elif req.operation == "offset_across":
+            distance = float(params.get("distance_m", 0)) * ureg.meter
+            for lid in req.line_ids:
+                if lid not in lines_by_id:
+                    continue
+                new_line = lines_by_id[lid].offset_across(distance)
+                campaign.replace_flight_line(lid, new_line)
+                transformed += 1
+
+        elif req.operation == "offset_along":
+            start_m = float(params.get("start_m", 0)) * ureg.meter
+            end_m = float(params.get("end_m", 0)) * ureg.meter
+            for lid in req.line_ids:
+                if lid not in lines_by_id:
+                    continue
+                new_line = lines_by_id[lid].offset_along(start_m, end_m)
+                campaign.replace_flight_line(lid, new_line)
+                transformed += 1
+
+        elif req.operation == "offset_north_east":
+            north = float(params.get("north_m", 0)) * ureg.meter
+            east = float(params.get("east_m", 0)) * ureg.meter
+            for lid in req.line_ids:
+                if lid not in lines_by_id:
+                    continue
+                new_line = lines_by_id[lid].offset_north_east(north, east)
+                campaign.replace_flight_line(lid, new_line)
+                transformed += 1
+
+        elif req.operation == "move_endpoint":
+            lid = params.get("line_id", req.line_ids[0] if req.line_ids else "")
+            endpoint = params.get("endpoint", "start")
+            lat = float(params.get("lat", 0))
+            lon = float(params.get("lon", 0))
+            if lid not in lines_by_id:
+                raise HTTPException(status_code=400, detail=f"Unknown line_id: '{lid}'")
+            old = lines_by_id[lid]
+            if endpoint == "start":
+                new_line = FlightLine.from_endpoints(
+                    lat, lon, old.lat2, old.lon2,
+                    altitude_msl=old.altitude_msl, site_name=old.site_name,
+                    site_description=old.site_description, investigator=old.investigator,
+                )
+            else:
+                new_line = FlightLine.from_endpoints(
+                    old.lat1, old.lon1, lat, lon,
+                    altitude_msl=old.altitude_msl, site_name=old.site_name,
+                    site_description=old.site_description, investigator=old.investigator,
+                )
+            campaign.replace_flight_line(lid, new_line)
+            transformed += 1
+
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown operation: '{req.operation}'")
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("transform failed: %s", traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Transform failed: {exc}")
+
+    _persist_campaign(campaign)
+    return {
+        "flight_lines": campaign.flight_lines_to_geojson(),
+        "transformed": transformed,
         "revision": campaign.revision,
     }
 

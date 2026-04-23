@@ -118,6 +118,27 @@ const markup = `
     </div>
 
     <div class="hyplan-section">
+        <h3>3b. Transform Selected Lines</h3>
+        <label>Operation</label>
+        <select id="hyplan-transform-op">
+            <option value="rotate">Rotate (deg)</option>
+            <option value="offset_across">Offset Across Track (m)</option>
+            <option value="offset_along">Offset Along Track (m)</option>
+            <option value="offset_north_east">Shift N/E (m)</option>
+        </select>
+        <div id="hyplan-transform-params">
+            <label id="hyplan-transform-label-1">Angle (deg)</label>
+            <input type="number" id="hyplan-transform-val-1" value="0" />
+            <div id="hyplan-transform-val-2-wrap" style="display:none">
+                <label id="hyplan-transform-label-2">Value 2</label>
+                <input type="number" id="hyplan-transform-val-2" value="0" />
+            </div>
+        </div>
+        <button id="hyplan-transform-btn" disabled>Apply Transform</button>
+        <div id="hyplan-transform-status" class="hyplan-status"></div>
+    </div>
+
+    <div class="hyplan-section">
         <h3>4. Compute Flight Plan</h3>
         <button id="hyplan-compute-btn" disabled>Compute Plan</button>
         <div id="hyplan-compute-status" class="hyplan-status"></div>
@@ -653,6 +674,77 @@ function interfaceWithMMGIS() {
         })
     })
 
+    // --- Transform UI ---
+    $('#hyplan-transform-op').on('change', function () {
+        const op = $(this).val()
+        const label1 = $('#hyplan-transform-label-1')
+        const wrap2 = $('#hyplan-transform-val-2-wrap')
+        const label2 = $('#hyplan-transform-label-2')
+
+        if (op === 'rotate') {
+            label1.text('Angle (deg)')
+            wrap2.hide()
+        } else if (op === 'offset_across') {
+            label1.text('Distance (m, + = right)')
+            wrap2.hide()
+        } else if (op === 'offset_along') {
+            label1.text('Start offset (m)')
+            label2.text('End offset (m)')
+            wrap2.show()
+        } else if (op === 'offset_north_east') {
+            label1.text('North (m)')
+            label2.text('East (m)')
+            wrap2.show()
+        }
+    })
+
+    $('#hyplan-transform-btn').on('click', function () {
+        if (!campaignId || selectedLineIds.length === 0) {
+            $('#hyplan-transform-status').text('Select lines first.')
+            return
+        }
+
+        const op = $('#hyplan-transform-op').val()
+        const val1 = parseFloat($('#hyplan-transform-val-1').val()) || 0
+        const val2 = parseFloat($('#hyplan-transform-val-2').val()) || 0
+
+        let params = {}
+        if (op === 'rotate') params = { angle_deg: val1 }
+        else if (op === 'offset_across') params = { distance_m: val1 }
+        else if (op === 'offset_along') params = { start_m: val1, end_m: val2 }
+        else if (op === 'offset_north_east') params = { north_m: val1, east_m: val2 }
+
+        $('#hyplan-transform-status').text('Applying...')
+        $('#hyplan-transform-btn').prop('disabled', true)
+
+        fetch(`${SERVICE_URL}/transform-lines`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                campaign_id: campaignId,
+                line_ids: selectedLineIds,
+                operation: op,
+                params: params,
+            }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail || data.message) {
+                $('#hyplan-transform-status').text('Error: ' + getErrorMessage(data))
+                return
+            }
+            displayFlightLines(data.flight_lines)
+            updateLineList(data.flight_lines)
+            $('#hyplan-transform-status').text(`Transformed ${data.transformed} line(s).`)
+        })
+        .catch(err => {
+            $('#hyplan-transform-status').text('Error: ' + err.message)
+        })
+        .finally(() => {
+            $('#hyplan-transform-btn').prop('disabled', false)
+        })
+    })
+
     // --- Flight Patterns ---
     $('#hyplan-set-pattern-center-btn').on('click', function () {
         patternCenterMode = true
@@ -956,6 +1048,7 @@ function updateSelectionStatus() {
     $('#hyplan-compute-btn').prop('disabled', selected === 0)
     $('#hyplan-optimize-btn').prop('disabled', selected < 2)
     $('#hyplan-delete-line-btn').prop('disabled', selected === 0)
+    $('#hyplan-transform-btn').prop('disabled', selected === 0)
 }
 
 function getErrorMessage(data) {
