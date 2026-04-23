@@ -866,7 +866,70 @@ function interfaceWithMMGIS() {
         })
     })
 
+    // --- Box Select (Shift+Drag) ---
+    let boxSelectRect = null
+    let boxSelectStart = null
+
+    function onBoxSelectMouseDown(e) {
+        if (!e.originalEvent.shiftKey) return
+        boxSelectStart = e.latlng
+        Map_.map.dragging.disable()
+    }
+
+    function onBoxSelectMouseMove(e) {
+        if (!boxSelectStart) return
+        if (boxSelectRect) Map_.map.removeLayer(boxSelectRect)
+        boxSelectRect = window.L.rectangle(
+            [boxSelectStart, e.latlng],
+            { color: '#60a5fa', weight: 2, fillOpacity: 0.15, dashArray: '5 5' }
+        ).addTo(Map_.map)
+    }
+
+    function onBoxSelectMouseUp(e) {
+        if (!boxSelectStart) return
+        Map_.map.dragging.enable()
+
+        const bounds = window.L.latLngBounds(boxSelectStart, e.latlng)
+        boxSelectStart = null
+        if (boxSelectRect) {
+            Map_.map.removeLayer(boxSelectRect)
+            boxSelectRect = null
+        }
+
+        // Select all flight lines that intersect the box
+        if (flightLineLayer) {
+            flightLineLayer.eachLayer(function (layer) {
+                const lineId = layer.feature.properties.line_id || layer.feature.id
+                const coords = layer.getLatLngs()
+                let intersects = false
+                for (let i = 0; i < coords.length; i++) {
+                    if (bounds.contains(coords[i])) {
+                        intersects = true
+                        break
+                    }
+                }
+                if (intersects && selectedLineIds.indexOf(lineId) < 0) {
+                    selectedLineIds.push(lineId)
+                    $(`.hyplan-line-item[data-lineid="${lineId}"]`).addClass('selected')
+                    layer.setStyle({ color: '#1d4ed8', weight: 4, opacity: 1.0 })
+                }
+            })
+            updateSelectionStatus()
+        }
+    }
+
+    Map_.map.on('mousedown', onBoxSelectMouseDown)
+    Map_.map.on('mousemove', onBoxSelectMouseMove)
+    Map_.map.on('mouseup', onBoxSelectMouseUp)
+
     function separateFromMMGIS() {
+        Map_.map.off('mousedown', onBoxSelectMouseDown)
+        Map_.map.off('mousemove', onBoxSelectMouseMove)
+        Map_.map.off('mouseup', onBoxSelectMouseUp)
+        if (boxSelectRect) {
+            Map_.map.removeLayer(boxSelectRect)
+            boxSelectRect = null
+        }
         if (flightLineLayer) {
             Map_.map.removeLayer(flightLineLayer)
             flightLineLayer = null
