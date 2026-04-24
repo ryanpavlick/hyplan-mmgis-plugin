@@ -17,6 +17,7 @@ import hyplan
 from hyplan.aircraft import Aircraft
 from hyplan.airports import Airport
 from hyplan.campaign import Campaign
+from hyplan.exceptions import HyPlanValueError
 from hyplan.flight_box import box_around_polygon, box_around_center_line
 from hyplan.flight_line import FlightLine
 from hyplan.flight_optimizer import greedy_optimize
@@ -151,8 +152,9 @@ class GenerateLinesResponse(BaseModel):
 
 
 class SequenceEntry(BaseModel):
-    kind: str  # "line" or "waypoint"
+    kind: str  # "line", "waypoint", or "pattern"
     line_id: Optional[str] = None
+    pattern_id: Optional[str] = None
     reversed: bool = False
     latitude: Optional[float] = None
     longitude: Optional[float] = None
@@ -420,25 +422,34 @@ def compute_plan(req: ComputePlanRequest):
     warnings: list[str] = []
     # Campaign is optional for waypoint-only sequences
     campaign = None
-    lines_by_id = {}
     if req.campaign_id:
         try:
             campaign = _get_campaign(req.campaign_id)
-            lines_by_id = dict(zip(campaign.flight_line_ids, campaign.flight_lines))
         except HTTPException:
-            if any(e.kind == "line" for e in req.sequence):
-                raise  # Need campaign for line references
+            if any(e.kind in ("line", "pattern") for e in req.sequence):
+                raise  # Need campaign for line/pattern references
     aircraft = _make_aircraft(req.aircraft)
     flight_sequence = []
 
     for entry in req.sequence:
         if entry.kind == "line":
-            if entry.line_id not in lines_by_id:
+            try:
+                line = campaign.get_line(entry.line_id) if campaign else None
+            except Exception:
+                line = None
+            if line is None:
                 raise HTTPException(status_code=400, detail=f"Unknown line_id: '{entry.line_id}'")
-            line = lines_by_id[entry.line_id]
             if entry.reversed:
                 line = line.reverse()
             flight_sequence.append(line)
+        elif entry.kind == "pattern":
+            if not campaign:
+                raise HTTPException(status_code=400, detail="Pattern reference requires a campaign.")
+            try:
+                pattern = campaign.get_pattern(entry.pattern_id)
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"Unknown pattern_id: '{entry.pattern_id}'")
+            flight_sequence.append(pattern)
         elif entry.kind == "waypoint":
             if entry.latitude is None or entry.longitude is None:
                 raise HTTPException(status_code=400, detail="Waypoint requires latitude and longitude.")
@@ -535,7 +546,7 @@ def optimize_sequence(req: OptimizeRequest):
     campaign = _get_campaign(req.campaign_id)
     aircraft = _make_aircraft(req.aircraft)
 
-    lines_by_id = dict(zip(campaign.flight_line_ids, campaign.flight_lines))
+    lines_by_id = campaign.all_flight_lines_dict()
     flight_lines = []
     for lid in req.line_ids:
         if lid not in lines_by_id:
@@ -799,12 +810,15 @@ class PatternRequest(BaseModel):
     campaign_id: str
     campaign_name: str = "Mission"
     campaign_bounds: list[float] = Field(..., min_length=4, max_length=4)
-    pattern: str  # "racetrack", "rosette", "polygon", "sawtooth", "spiral"
+    pattern: str  # "racetrack", "rosette", "polygon", "sawtooth", "spiral", "glint_arc"
     center_lat: float
     center_lon: float
     heading: float = 0.0
     altitude_msl_m: float = 3000.0
     params: dict = Field(default_factory=dict)
+    # Required for "glint_arc"; ignored otherwise:
+    takeoff_time: Optional[str] = None  # ISO 8601 UTC
+    aircraft: Optional[str] = None      # name from /aircraft
 
 
 class SwathRequest(BaseModel):
@@ -821,7 +835,7 @@ def generate_swaths(req: SwathRequest):
     from shapely.geometry import mapping as shapely_mapping
 
     campaign = _get_campaign(req.campaign_id)
-    lines_by_id = dict(zip(campaign.flight_line_ids, campaign.flight_lines))
+    lines_by_id = campaign.all_flight_lines_dict()
 
     try:
         sensor = create_sensor(req.sensor)
@@ -875,6 +889,327 @@ def generate_swaths(req: SwathRequest):
     }
 
 
+class GlintRequest(BaseModel):
+    campaign_id: str
+    line_ids: list[str]
+    sensor: str
+    takeoff_time: str  # ISO 8601 UTC, like /compute-plan
+    threshold_deg: float = 25.0
+    max_points_per_line: int = 4000  # uniform stride-subsample if exceeded
+
+
+@app.post("/compute-glint")
+def compute_glint(req: GlintRequest):
+    """Compute per-swath-sample glint angles for selected flight lines.
+
+    Reproduces the visualization from notebooks/glint_analysis.ipynb Cell 10:
+    one Point feature per cross-track sample colored by glint_angle.
+    """
+    from hyplan.glint import compute_glint_vectorized, fraction_exceeding_glint_threshold
+    from hyplan.sun import sunpos
+
+    campaign = _get_campaign(req.campaign_id)
+    lines_by_id = campaign.all_flight_lines_dict()
+
+    try:
+        sensor = create_sensor(req.sensor)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid sensor: {exc}")
+
+    try:
+        obs_time = datetime.datetime.fromisoformat(req.takeoff_time.replace('Z', '+00:00'))
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid takeoff_time: '{req.takeoff_time}'")
+
+    features: list = []
+    summary: list = []
+    warnings: list = []
+    any_sun_below_horizon = False
+
+    for lid in req.line_ids:
+        if lid not in lines_by_id:
+            warnings.append(f"Unknown line_id: '{lid}'")
+            continue
+        line = lines_by_id[lid]
+        try:
+            gdf = compute_glint_vectorized(line, sensor, obs_time)
+        except Exception as exc:
+            logger.error("compute-glint failed for %s: %s", lid, traceback.format_exc())
+            warnings.append(f"Glint failed for {lid}: {exc}")
+            continue
+
+        # Solar position at the line's midpoint for context in the UI
+        mid_lat = (line.lat1 + line.lat2) / 2.0
+        mid_lon = (line.lon1 + line.lon2) / 2.0
+        alt_m = line.altitude_msl.magnitude if line.altitude_msl else 0.0
+        try:
+            sol_az, sol_zen, *_ = sunpos(
+                dt=obs_time, latitude=mid_lat, longitude=mid_lon,
+                elevation=alt_m, radians=False,
+            )
+            sol_az_f = float(sol_az) if hasattr(sol_az, "__len__") is False else float(sol_az.item() if hasattr(sol_az, "item") else sol_az)
+            sol_zen_f = float(sol_zen) if hasattr(sol_zen, "__len__") is False else float(sol_zen.item() if hasattr(sol_zen, "item") else sol_zen)
+        except Exception:
+            sol_az_f = None
+            sol_zen_f = None
+        if sol_zen_f is not None and sol_zen_f > 90.0:
+            any_sun_below_horizon = True
+
+        # Stride-subsample if too dense for browser rendering
+        n = len(gdf)
+        if n > req.max_points_per_line and n > 0:
+            stride = (n + req.max_points_per_line - 1) // req.max_points_per_line
+            gdf_render = gdf.iloc[::stride]
+        else:
+            gdf_render = gdf
+
+        for row in gdf_render.itertuples(index=False):
+            features.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [float(row.target_longitude), float(row.target_latitude)],
+                },
+                "properties": {
+                    "line_id": lid,
+                    "glint_angle": float(row.glint_angle),
+                    "tilt_angle": float(row.tilt_angle),
+                    "along_track_distance": float(row.along_track_distance),
+                },
+            })
+
+        try:
+            frac = fraction_exceeding_glint_threshold(gdf, req.threshold_deg)
+        except Exception:
+            frac = None
+
+        summary.append({
+            "line_id": lid,
+            "site_name": line.site_name or lid,
+            "n_samples": int(n),
+            "mean_glint": float(gdf["glint_angle"].mean()) if n else None,
+            "min_glint": float(gdf["glint_angle"].min()) if n else None,
+            "max_glint": float(gdf["glint_angle"].max()) if n else None,
+            "fraction_below_threshold": float(frac) if frac is not None else None,
+            "solar_azimuth": sol_az_f,
+            "solar_zenith": sol_zen_f,
+        })
+
+    if any_sun_below_horizon:
+        warnings.insert(
+            0,
+            "Sun is below the horizon (solar_zenith > 90°) at the observation time. "
+            "Glint angles are not physically meaningful for nighttime. "
+            "Check that takeoff_time is in UTC — the datetime-local input has no timezone, "
+            "so a local wall-clock time may produce nighttime UTC at the mission site."
+        )
+
+    return {
+        "glint": {
+            "type": "FeatureCollection",
+            "features": features,
+        },
+        "summary": summary,
+        "threshold_deg": req.threshold_deg,
+        "takeoff_time": req.takeoff_time,
+        "sensor": req.sensor,
+        "warnings": warnings,
+        "sun_below_horizon": any_sun_below_horizon,
+    }
+
+
+class OptimizeAzimuthRequest(BaseModel):
+    lat: float
+    lon: float
+    altitude_msl_m: float
+    sensor: str
+    takeoff_time: str  # ISO 8601 UTC
+    leg_length_m: float = 15000.0
+    step_deg: float = 15.0
+    criterion: str = "max_mean"  # "max_mean" | "max_min"
+
+
+@app.post("/optimize-azimuth")
+def optimize_azimuth(req: OptimizeAzimuthRequest):
+    """Sweep flight-line azimuth at a test point and return the heading
+    that maximizes glint angle, mirroring notebooks/glint_analysis.ipynb
+    Cell 12.
+
+    Returns the full sweep for plotting plus the picked optimum.
+    """
+    import numpy as np
+    from hyplan.flight_line import FlightLine
+    from hyplan.glint import compute_glint_vectorized
+    from hyplan.sun import sunpos
+
+    try:
+        sensor = create_sensor(req.sensor)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid sensor: {exc}")
+
+    try:
+        obs_time = datetime.datetime.fromisoformat(req.takeoff_time.replace('Z', '+00:00'))
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid takeoff_time: '{req.takeoff_time}'")
+
+    if req.criterion not in ("max_mean", "max_min"):
+        raise HTTPException(status_code=400, detail=f"criterion must be 'max_mean' or 'max_min'")
+    if req.step_deg <= 0 or req.step_deg > 90:
+        raise HTTPException(status_code=400, detail="step_deg must be in (0, 90]")
+    if req.leg_length_m <= 0:
+        raise HTTPException(status_code=400, detail="leg_length_m must be positive")
+
+    # Solar position at test point + time for context / sun-below-horizon flag
+    try:
+        sol_az, sol_zen, *_ = sunpos(
+            dt=obs_time, latitude=req.lat, longitude=req.lon,
+            elevation=req.altitude_msl_m, radians=False,
+        )
+        sol_az_f = float(sol_az.item()) if hasattr(sol_az, "item") else float(sol_az)
+        sol_zen_f = float(sol_zen.item()) if hasattr(sol_zen, "item") else float(sol_zen)
+    except Exception:
+        sol_az_f = None
+        sol_zen_f = None
+    sun_below_horizon = bool(sol_zen_f is not None and sol_zen_f > 90.0)
+
+    headings = list(np.arange(0.0, 360.0, req.step_deg))
+    mean_glints: list = []
+    min_glints: list = []
+    max_glints: list = []
+
+    for hdg in headings:
+        fl = FlightLine.center_length_azimuth(
+            lat=req.lat, lon=req.lon,
+            length=req.leg_length_m * ureg.meter,
+            az=float(hdg),
+            altitude_msl=req.altitude_msl_m * ureg.meter,
+            site_name=f"sweep-{int(hdg):03d}",
+        )
+        try:
+            gdf = compute_glint_vectorized(fl, sensor, obs_time)
+            mean_glints.append(float(gdf["glint_angle"].mean()))
+            min_glints.append(float(gdf["glint_angle"].min()))
+            max_glints.append(float(gdf["glint_angle"].max()))
+        except Exception:
+            mean_glints.append(float("nan"))
+            min_glints.append(float("nan"))
+            max_glints.append(float("nan"))
+
+    # Pick best heading by chosen criterion
+    arr = np.array(mean_glints if req.criterion == "max_mean" else min_glints)
+    # NaN-safe argmax
+    valid = ~np.isnan(arr)
+    if not valid.any():
+        raise HTTPException(status_code=500, detail="All sweep samples failed.")
+    idx_best = int(np.nanargmax(arr))
+    optimal_azimuth = float(headings[idx_best])
+    optimal_value = float(arr[idx_best])
+
+    warnings: list = []
+    if sun_below_horizon:
+        warnings.append(
+            "Sun is below the horizon (solar_zenith > 90°) at the test point — "
+            "the 'optimum' heading is not physically meaningful for nighttime."
+        )
+
+    return {
+        "lat": req.lat,
+        "lon": req.lon,
+        "altitude_msl_m": req.altitude_msl_m,
+        "sensor": req.sensor,
+        "takeoff_time": req.takeoff_time,
+        "leg_length_m": req.leg_length_m,
+        "step_deg": req.step_deg,
+        "criterion": req.criterion,
+        "headings": [float(h) for h in headings],
+        "mean_glint": mean_glints,
+        "min_glint": min_glints,
+        "max_glint": max_glints,
+        "optimal_azimuth": optimal_azimuth,
+        "optimal_value": optimal_value,
+        "solar_azimuth": sol_az_f,
+        "solar_zenith": sol_zen_f,
+        "sun_below_horizon": sun_below_horizon,
+        "warnings": warnings,
+    }
+
+
+class SolarPositionRequest(BaseModel):
+    lat: float
+    lon: float
+    date: str  # YYYY-MM-DD (interpreted in UTC)
+    increment_min: int = 10
+
+
+@app.post("/solar-position")
+def solar_position(req: SolarPositionRequest):
+    """Return a 24-hour time series of solar position at (lat, lon) on `date`.
+
+    Used by the plugin's "Solar Position" panel to plot solar zenith vs
+    UTC time at a user-chosen point.  The full curve (including night) is
+    returned so the chart can show sub-horizon values.
+    """
+    from hyplan.sun import solar_position_increments
+
+    try:
+        df = solar_position_increments(
+            latitude=req.lat,
+            longitude=req.lon,
+            date=req.date,
+            min_elevation=-90.0,           # full 24h, including night
+            timezone_offset=0,             # keep times in UTC
+            increment=f"{req.increment_min}min",
+        )
+    except Exception as exc:
+        logger.error("solar-position failed: %s", traceback.format_exc())
+        raise HTTPException(status_code=400, detail=f"solar_position_increments failed: {exc}")
+
+    times = df["Time"].tolist()
+    elevation = [float(e) for e in df["Elevation"].tolist()]
+    azimuth = [float(a) for a in df["Azimuth"].tolist()]
+    zenith = [90.0 - e for e in elevation]
+
+    # Linear-interp sunrise/sunset crossings of elevation=0
+    def _interp_cross(idx0: int, idx1: int) -> str:
+        e0, e1 = elevation[idx0], elevation[idx1]
+        if e1 == e0:
+            return times[idx0]
+        frac = (0.0 - e0) / (e1 - e0)
+        # times are HH:MM:SS strings in UTC; convert to minutes-of-day
+        h0, m0, s0 = (int(x) for x in times[idx0].split(":"))
+        h1, m1, s1 = (int(x) for x in times[idx1].split(":"))
+        t0 = h0 * 60 + m0 + s0 / 60.0
+        t1 = h1 * 60 + m1 + s1 / 60.0
+        # Handle the wrap-around at the end of the day (last sample is 23:50)
+        if t1 < t0:
+            t1 += 24 * 60
+        t = t0 + frac * (t1 - t0)
+        h = int(t // 60) % 24
+        m = int(t % 60)
+        return f"{h:02d}:{m:02d}"
+
+    sunrise_utc = None
+    sunset_utc = None
+    for i in range(1, len(elevation)):
+        if elevation[i - 1] < 0 <= elevation[i] and sunrise_utc is None:
+            sunrise_utc = _interp_cross(i - 1, i)
+        if elevation[i - 1] >= 0 > elevation[i]:
+            sunset_utc = _interp_cross(i - 1, i)
+
+    return {
+        "lat": req.lat,
+        "lon": req.lon,
+        "date": req.date,
+        "increment_min": req.increment_min,
+        "time_utc": times,
+        "elevation_deg": elevation,
+        "zenith_deg": zenith,
+        "azimuth_deg": azimuth,
+        "sunrise_utc": sunrise_utc,
+        "sunset_utc": sunset_utc,
+    }
+
+
 @app.post("/add-line")
 def add_line(req: AddLineRequest):
     """Add a single flight line to a campaign."""
@@ -913,12 +1248,11 @@ def edit_line(req: EditLineRequest):
     """Edit an existing flight line's endpoints, altitude, or name."""
     campaign = _get_campaign(req.campaign_id)
 
-    # Get existing line
-    lines_by_id = dict(zip(campaign.flight_line_ids, campaign.flight_lines))
-    if req.line_id not in lines_by_id:
+    try:
+        old = campaign.get_line(req.line_id)
+    except Exception:
         raise HTTPException(status_code=400, detail=f"Unknown line_id: '{req.line_id}'")
 
-    old = lines_by_id[req.line_id]
     lat1 = req.lat1 if req.lat1 is not None else old.lat1
     lon1 = req.lon1 if req.lon1 is not None else old.lon1
     lat2 = req.lat2 if req.lat2 is not None else old.lat2
@@ -932,80 +1266,96 @@ def edit_line(req: EditLineRequest):
         site_description=old.site_description,
         investigator=old.investigator,
     )
-    campaign.replace_flight_line(req.line_id, new_line)
+    campaign.replace_line_anywhere(req.line_id, new_line)
     _persist_campaign(campaign)
     return {
         "flight_lines": campaign.flight_lines_to_geojson(),
+        "patterns": campaign.patterns_to_geojson(),
         "revision": campaign.revision,
     }
 
 
 @app.post("/delete-line")
 def delete_line(req: DeleteLineRequest):
-    """Delete a flight line from a campaign."""
+    """Delete a flight line from a campaign (free-standing or pattern leg)."""
     campaign = _get_campaign(req.campaign_id)
-    campaign.remove_flight_line(req.line_id)
+    try:
+        campaign.remove_line_anywhere(req.line_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     _persist_campaign(campaign)
     return {
         "flight_lines": campaign.flight_lines_to_geojson(),
         "groups": campaign.groups,
+        "patterns": campaign.patterns_to_geojson(),
         "revision": campaign.revision,
     }
 
 
 @app.post("/transform-lines")
 def transform_lines(req: TransformLinesRequest):
-    """Apply a geometric transform to one or more flight lines."""
+    """Apply a geometric transform to one or more flight lines.
+
+    Lines may be free-standing or owned by a line-based pattern; either is
+    resolved via ``campaign.get_line(...)`` and written back via
+    ``campaign.replace_line_anywhere(...)`` so pattern membership is
+    preserved.
+    """
     campaign = _get_campaign(req.campaign_id)
-    lines_by_id = dict(zip(campaign.flight_line_ids, campaign.flight_lines))
     params = req.params
     transformed = 0
+
+    def _get(lid: str):
+        try:
+            return campaign.get_line(lid)
+        except Exception:
+            return None
 
     try:
         if req.operation == "rotate":
             angle = float(params.get("angle_deg", 0))
             for lid in req.line_ids:
-                if lid not in lines_by_id:
+                old = _get(lid)
+                if old is None:
                     continue
-                new_line = lines_by_id[lid].rotate_around_midpoint(angle)
-                campaign.replace_flight_line(lid, new_line)
+                campaign.replace_line_anywhere(lid, old.rotate_around_midpoint(angle))
                 transformed += 1
 
         elif req.operation == "offset_across":
             distance = float(params.get("distance_m", 0)) * ureg.meter
             for lid in req.line_ids:
-                if lid not in lines_by_id:
+                old = _get(lid)
+                if old is None:
                     continue
-                new_line = lines_by_id[lid].offset_across(distance)
-                campaign.replace_flight_line(lid, new_line)
+                campaign.replace_line_anywhere(lid, old.offset_across(distance))
                 transformed += 1
 
         elif req.operation == "offset_along":
             start_m = float(params.get("start_m", 0)) * ureg.meter
             end_m = float(params.get("end_m", 0)) * ureg.meter
             for lid in req.line_ids:
-                if lid not in lines_by_id:
+                old = _get(lid)
+                if old is None:
                     continue
-                new_line = lines_by_id[lid].offset_along(start_m, end_m)
-                campaign.replace_flight_line(lid, new_line)
+                campaign.replace_line_anywhere(lid, old.offset_along(start_m, end_m))
                 transformed += 1
 
         elif req.operation == "offset_north_east":
             north = float(params.get("north_m", 0)) * ureg.meter
             east = float(params.get("east_m", 0)) * ureg.meter
             for lid in req.line_ids:
-                if lid not in lines_by_id:
+                old = _get(lid)
+                if old is None:
                     continue
-                new_line = lines_by_id[lid].offset_north_east(north, east)
-                campaign.replace_flight_line(lid, new_line)
+                campaign.replace_line_anywhere(lid, old.offset_north_east(north, east))
                 transformed += 1
 
         elif req.operation == "reverse":
             for lid in req.line_ids:
-                if lid not in lines_by_id:
+                old = _get(lid)
+                if old is None:
                     continue
-                new_line = lines_by_id[lid].reverse()
-                campaign.replace_flight_line(lid, new_line)
+                campaign.replace_line_anywhere(lid, old.reverse())
                 transformed += 1
 
         elif req.operation == "move_endpoint":
@@ -1013,9 +1363,9 @@ def transform_lines(req: TransformLinesRequest):
             endpoint = params.get("endpoint", "start")
             lat = float(params.get("lat", 0))
             lon = float(params.get("lon", 0))
-            if lid not in lines_by_id:
+            old = _get(lid)
+            if old is None:
                 raise HTTPException(status_code=400, detail=f"Unknown line_id: '{lid}'")
-            old = lines_by_id[lid]
             if endpoint == "start":
                 new_line = FlightLine.from_endpoints(
                     lat, lon, old.lat2, old.lon2,
@@ -1028,7 +1378,7 @@ def transform_lines(req: TransformLinesRequest):
                     altitude_msl=old.altitude_msl, site_name=old.site_name,
                     site_description=old.site_description, investigator=old.investigator,
                 )
-            campaign.replace_flight_line(lid, new_line)
+            campaign.replace_line_anywhere(lid, new_line)
             transformed += 1
 
         else:
@@ -1043,112 +1393,221 @@ def transform_lines(req: TransformLinesRequest):
     _persist_campaign(campaign)
     return {
         "flight_lines": campaign.flight_lines_to_geojson(),
+        "patterns": campaign.patterns_to_geojson(),
         "transformed": transformed,
         "revision": campaign.revision,
     }
 
 
-@app.post("/generate-pattern")
-def generate_pattern(req: PatternRequest):
-    """Generate a flight pattern (racetrack, rosette, polygon, sawtooth, spiral)."""
+def _invoke_pattern_generator(kind: str, center: tuple, heading: float,
+                              altitude_msl_m: float, params: dict,
+                              takeoff_time: Optional[str] = None,
+                              aircraft: Optional[str] = None):
+    """Dispatch to the right hyplan generator; always returns a Pattern.
+
+    ``takeoff_time`` and ``aircraft`` are required only for ``glint_arc``;
+    ignored for other kinds.
+    """
     from hyplan.flight_patterns import (
-        racetrack, rosette, polygon as poly_pattern, sawtooth, spiral,
+        racetrack, rosette, polygon as poly_pattern, sawtooth, spiral, glint_arc,
     )
 
+    if kind == "racetrack":
+        return racetrack(
+            center=center, heading=heading,
+            altitude=altitude_msl_m * ureg.meter,
+            leg_length=params.get("leg_length_m", 10000) * ureg.meter,
+            n_legs=params.get("n_legs", 1),
+            offset=(params.get("offset_m", 0) * ureg.meter
+                    if params.get("offset_m") else 0 * ureg.meter),
+        )
+    if kind == "rosette":
+        return rosette(
+            center=center, heading=heading,
+            altitude=altitude_msl_m * ureg.meter,
+            radius=params.get("radius_m", 5000) * ureg.meter,
+            n_lines=params.get("n_lines", 3),
+        )
+    if kind == "polygon":
+        return poly_pattern(
+            center=center, heading=heading,
+            altitude=altitude_msl_m * ureg.meter,
+            radius=params.get("radius_m", 5000) * ureg.meter,
+            n_sides=int(params.get("n_sides", 4)),
+            aspect_ratio=float(params.get("aspect_ratio", 1.0)),
+        )
+    if kind == "sawtooth":
+        return sawtooth(
+            center=center, heading=heading,
+            altitude_min=params.get("altitude_min_m", 1000) * ureg.meter,
+            altitude_max=params.get("altitude_max_m", 3000) * ureg.meter,
+            leg_length=params.get("leg_length_m", 10000) * ureg.meter,
+            n_cycles=params.get("n_cycles", 2),
+        )
+    if kind == "spiral":
+        return spiral(
+            center=center, heading=heading,
+            altitude_start=params.get("altitude_start_m", 500) * ureg.meter,
+            altitude_end=params.get("altitude_end_m", 3000) * ureg.meter,
+            radius=params.get("radius_m", 3000) * ureg.meter,
+            n_turns=float(params.get("n_turns", 3)),
+            direction=str(params.get("direction", "right")),
+        )
+    if kind == "glint_arc":
+        if not takeoff_time:
+            raise HTTPException(status_code=400, detail="glint_arc requires takeoff_time (UTC).")
+        if not aircraft:
+            raise HTTPException(status_code=400, detail="glint_arc requires aircraft (for cruise speed).")
+        try:
+            obs_dt = datetime.datetime.fromisoformat(takeoff_time.replace("Z", "+00:00"))
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid takeoff_time: '{takeoff_time}'")
+        ac = _make_aircraft(aircraft)
+        alt_q = altitude_msl_m * ureg.meter
+        speed_q = ac.cruise_speed_at(alt_q)
+        cl_m = params.get("collection_length_m")
+        cl_q = cl_m * ureg.meter if cl_m not in (None, "") else None
+        bank = params.get("bank_angle")
+        if bank in ("", None):
+            bank = None
+        else:
+            bank = float(bank)
+        return glint_arc(
+            center=center,
+            observation_datetime=obs_dt,
+            altitude=alt_q,
+            speed=speed_q,
+            bank_angle=bank,
+            bank_direction=str(params.get("bank_direction", "right")),
+            collection_length=cl_q,
+        )
+    raise HTTPException(status_code=400, detail=f"Unknown pattern: '{kind}'")
+
+
+def _pattern_response_payload(campaign, pattern) -> dict:
+    """Canonical response body for pattern mutations."""
+    return {
+        "campaign_id": campaign.campaign_id,
+        "revision": campaign.revision,
+        "pattern_id": pattern.pattern_id,
+        "pattern_kind": pattern.kind,
+        "pattern_name": pattern.name,
+        "pattern_params": pattern.params,
+        "is_line_based": pattern.is_line_based,
+        "flight_lines": campaign.flight_lines_to_geojson(),
+        "patterns": campaign.patterns_to_geojson(),
+    }
+
+
+@app.post("/generate-pattern")
+def generate_pattern(req: PatternRequest):
+    """Generate a flight pattern (racetrack, rosette, polygon, sawtooth, spiral)
+    and add it to the campaign as a first-class Pattern."""
     campaign = _get_or_create_campaign(
         req.campaign_id, req.campaign_name, req.campaign_bounds,
     )
 
-    center = (req.center_lat, req.center_lon)
-    altitude = req.altitude_msl_m * ureg.meter
-    params = req.params
-
     try:
-        if req.pattern == "racetrack":
-            waypoints = racetrack(
-                center=center,
-                heading=req.heading,
-                altitude=altitude,
-                leg_length=params.get("leg_length_m", 10000) * ureg.meter,
-                n_legs=params.get("n_legs", 1),
-                offset=params.get("offset_m", 0) * ureg.meter if params.get("offset_m") else 0 * ureg.meter,
-            )
-        elif req.pattern == "rosette":
-            waypoints = rosette(
-                center=center,
-                heading=req.heading,
-                altitude=altitude,
-                radius=params.get("radius_m", 5000) * ureg.meter,
-                n_lines=params.get("n_lines", 3),
-            )
-        elif req.pattern == "polygon":
-            waypoints = poly_pattern(
-                center=center,
-                heading=req.heading,
-                altitude=altitude,
-                radius=params.get("radius_m", 5000) * ureg.meter,
-                n_sides=int(params.get("n_sides", 4)),
-                aspect_ratio=float(params.get("aspect_ratio", 1.0)),
-            )
-        elif req.pattern == "sawtooth":
-            waypoints = sawtooth(
-                center=center,
-                heading=req.heading,
-                altitude_min=params.get("altitude_min_m", 1000) * ureg.meter,
-                altitude_max=params.get("altitude_max_m", 3000) * ureg.meter,
-                leg_length=params.get("leg_length_m", 10000) * ureg.meter,
-                n_cycles=params.get("n_cycles", 2),
-            )
-        elif req.pattern == "spiral":
-            waypoints = spiral(
-                center=center,
-                heading=req.heading,
-                altitude_start=params.get("altitude_start_m", 500) * ureg.meter,
-                altitude_end=params.get("altitude_end_m", 3000) * ureg.meter,
-                radius=params.get("radius_m", 3000) * ureg.meter,
-                n_turns=float(params.get("n_turns", 3)),
-                direction=str(params.get("direction", "right")),
-            )
-        else:
-            raise HTTPException(status_code=400, detail=f"Unknown pattern: '{req.pattern}'")
+        pattern = _invoke_pattern_generator(
+            req.pattern,
+            (req.center_lat, req.center_lon),
+            req.heading,
+            req.altitude_msl_m,
+            req.params,
+            takeoff_time=req.takeoff_time,
+            aircraft=req.aircraft,
+        )
     except HTTPException:
         raise
+    except HyPlanValueError as exc:
+        # Geometry validation (e.g. solar zenith too high/low for glint_arc)
+        # — these are user-actionable, not server bugs.
+        raise HTTPException(status_code=400, detail=f"{exc}")
     except Exception as exc:
         logger.error("generate-pattern failed: %s", traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Pattern generation failed: {exc}")
 
-    # Convert waypoints to GeoJSON for display
-    features = []
-    coords = []
-    for i, wp in enumerate(waypoints):
-        coords.append([wp.longitude, wp.latitude])
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [wp.longitude, wp.latitude]},
-            "properties": {
-                "name": wp.name or f"WP{i+1}",
-                "altitude_msl": wp.altitude_msl.m_as(ureg.meter) if wp.altitude_msl else None,
-                "heading": wp.heading,
-                "index": i,
-            },
-        })
+    # Give the pattern a friendlier name keyed to its kind count in this campaign
+    existing_of_kind = sum(1 for p in campaign.patterns if p.kind == req.pattern)
+    pattern.name = f"{req.pattern.capitalize()} {existing_of_kind + 1}"
 
-    # Add the track as a LineString
-    if len(coords) >= 2:
-        features.insert(0, {
-            "type": "Feature",
-            "geometry": {"type": "LineString", "coordinates": coords},
-            "properties": {"name": req.pattern, "type": "pattern_track"},
-        })
+    campaign.add_pattern(pattern)
+    _persist_campaign(campaign)
+    return _pattern_response_payload(campaign, pattern)
 
+
+class DeletePatternRequest(BaseModel):
+    campaign_id: str
+    pattern_id: str
+
+
+@app.post("/delete-pattern")
+def delete_pattern(req: DeletePatternRequest):
+    """Delete a pattern and all its legs/waypoints from the campaign."""
+    campaign = _get_campaign(req.campaign_id)
+    try:
+        campaign.remove_pattern(req.pattern_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    _persist_campaign(campaign)
     return {
-        "pattern": req.pattern,
-        "waypoints": {
-            "type": "FeatureCollection",
-            "features": features,
-        },
-        "waypoint_count": len(waypoints),
         "campaign_id": campaign.campaign_id,
+        "revision": campaign.revision,
+        "flight_lines": campaign.flight_lines_to_geojson(),
+        "patterns": campaign.patterns_to_geojson(),
+    }
+
+
+class ReplacePatternRequest(BaseModel):
+    campaign_id: str
+    pattern_id: str
+    overrides: dict = Field(default_factory=dict)
+
+
+@app.post("/replace-pattern")
+def replace_pattern(req: ReplacePatternRequest):
+    """Regenerate a pattern in place with parameter overrides.
+
+    ``overrides`` is merged into the pattern's stored params (meters/degrees)
+    before re-invoking the generator.  The pattern_id is preserved; contained
+    flight lines receive fresh line_ids.
+    """
+    campaign = _get_campaign(req.campaign_id)
+    try:
+        old = campaign.get_pattern(req.pattern_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    try:
+        new_pattern = old.regenerate(**req.overrides)
+    except Exception as exc:
+        logger.error("replace-pattern regenerate failed: %s", traceback.format_exc())
+        raise HTTPException(status_code=400, detail=f"Regenerate failed: {exc}")
+
+    campaign.replace_pattern(req.pattern_id, new_pattern)
+    _persist_campaign(campaign)
+    return _pattern_response_payload(campaign, new_pattern)
+
+
+@app.get("/patterns/{campaign_id}")
+def list_patterns(campaign_id: str):
+    """List all patterns attached to a campaign."""
+    campaign = _get_campaign(campaign_id)
+    return {
+        "campaign_id": campaign.campaign_id,
+        "revision": campaign.revision,
+        "patterns": [
+            {
+                "pattern_id": p.pattern_id,
+                "kind": p.kind,
+                "name": p.name,
+                "is_line_based": p.is_line_based,
+                "line_ids": p.line_ids,
+                "waypoint_count": len(p.waypoints),
+                "params": p.params,
+            }
+            for p in campaign.patterns
+        ],
     }
 
 
@@ -1177,4 +1636,5 @@ def get_campaign(campaign_id: str):
         "revision": campaign.revision,
         "flight_lines": campaign.flight_lines_to_geojson(),
         "groups": campaign.groups,
+        "patterns": campaign.patterns_to_geojson(),
     }

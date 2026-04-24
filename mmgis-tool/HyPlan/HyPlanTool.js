@@ -14,13 +14,55 @@ let flightLineLayer = null
 let planLayer = null
 let selectedLineIds = []
 let windLayer = null
-let patternLayer = null
-let patternWaypoints = []  // stored waypoints from last pattern generation
+let patternsLayer = null            // map layer for all patterns (waypoint + line-pattern decoration)
+let patternsCache = []              // [{pattern_id, kind, name, is_line_based, ...}]
+let patternRefsForCompute = []      // pattern_ids of waypoint patterns to include in compute
 let swathLayer = null
+let glintLayer = null
 let drawLineMode = false
 let drawLineStart = null
 let patternCenterMode = false
 let patternCenter = null
+let solarPickMode = false
+let solarMarkerLayer = null
+
+// --- Self-heal against MMGIS layer-state resets ---------------------------
+// MMGIS toggling a Draw file / layer in the Layers panel can collaterally
+// remove layers we added directly to Map_.map. Tag our layers with
+// _hyplanOwned and re-add them if they're removed without our consent.
+// Callers use hyplanOwn() when adding and hyplanDisownAndRemove() when
+// intentionally removing so the layerremove listener knows the difference.
+
+function hyplanOwn(layer) {
+    if (!layer) return layer
+    layer._hyplanOwned = true
+    return layer
+}
+
+function hyplanDisownAndRemove(layer) {
+    if (!layer) return
+    layer._hyplanOwned = false
+    if (Map_.map && Map_.map.hasLayer(layer)) {
+        Map_.map.removeLayer(layer)
+    }
+}
+
+let _hyplanSelfHealInstalled = false
+function installHyplanSelfHeal() {
+    if (_hyplanSelfHealInstalled || !Map_ || !Map_.map) return
+    Map_.map.on('layerremove', function (e) {
+        const layer = e.layer
+        if (!layer || !layer._hyplanOwned) return
+        // Re-add on next tick so we don't race any further synchronous ops
+        // from the caller that removed us (e.g. an MMGIS toggle cascade).
+        setTimeout(function () {
+            if (layer._hyplanOwned && !Map_.map.hasLayer(layer)) {
+                layer.addTo(Map_.map)
+            }
+        }, 50)
+    })
+    _hyplanSelfHealInstalled = true
+}
 
 const markup = `
 <div id="hyplanTool">
@@ -42,8 +84,9 @@ const markup = `
         <input type="text" id="hyplan-takeoff-airport" value="" placeholder="e.g. KPMD" />
         <label>Return Airport (ICAO, blank = same as takeoff)</label>
         <input type="text" id="hyplan-return-airport" value="" placeholder="" />
-        <label>Takeoff Time (UTC)</label>
+        <label>Takeoff Time (UTC — not local!)</label>
         <input type="datetime-local" id="hyplan-takeoff-time" value="" />
+        <div style="font-size:10px; color:var(--color-c); margin-top:-2px">The browser shows your local clock, but the entered value is sent as UTC. For noon local, enter noon + (your UTC offset).</div>
         <label>Wind</label>
         <select id="hyplan-wind-kind">
             <option value="still_air" selected>Still Air</option>
@@ -71,6 +114,9 @@ const markup = `
         <input type="number" id="hyplan-overlap" value="20" />
         <label>Azimuth (blank = auto)</label>
         <input type="text" id="hyplan-azimuth" value="" />
+        <button id="hyplan-optimize-azimuth-btn">Optimize Azimuth (min glint)</button>
+        <div id="hyplan-optimize-azimuth-status" class="hyplan-status"></div>
+        <div id="hyplan-optimize-azimuth-plot"></div>
         <button id="hyplan-generate-btn">Generate Flight Box</button>
         <div id="hyplan-generate-status" class="hyplan-status"></div>
     </div>
@@ -94,6 +140,7 @@ const markup = `
             <option value="polygon">Polygon</option>
             <option value="sawtooth">Sawtooth</option>
             <option value="spiral">Spiral</option>
+            <option value="glint_arc">Glint Arc</option>
         </select>
         <label>Heading (deg)</label>
         <input type="number" id="hyplan-pattern-heading" value="0" />
@@ -102,6 +149,12 @@ const markup = `
         <button id="hyplan-cancel-pattern-btn" style="display:none">Cancel</button>
         <button id="hyplan-generate-pattern-btn" disabled>Generate Pattern</button>
         <div id="hyplan-pattern-status" class="hyplan-status"></div>
+    </div>
+
+    <div class="hyplan-section">
+        <h3>2d. Patterns in Campaign</h3>
+        <p style="font-size:11px; color:var(--color-c)">Delete a pattern as a whole. Line patterns also show each leg in the line list above for individual selection/transform.</p>
+        <div id="hyplan-patterns-list" class="hyplan-patterns-list"></div>
     </div>
 
     <div class="hyplan-section">
@@ -152,7 +205,30 @@ const markup = `
     </div>
 
     <div class="hyplan-section">
-        <h3>5. Export</h3>
+        <h3>4c. Glint Analysis</h3>
+        <p style="font-size:11px; color:var(--color-c)">For each selected line at the takeoff time and current sensor, plots per-swath-sample glint angle. Rotate or shift selected lines (Section 3b) or change the takeoff time (Section 1) and re-compute to minimize glint.</p>
+        <label>Glint threshold (deg)</label>
+        <input type="number" id="hyplan-glint-threshold" value="25" step="1" min="1" max="90" />
+        <button id="hyplan-show-glint-btn" disabled>Compute Glint</button>
+        <button id="hyplan-hide-glint-btn" style="display:none">Hide Glint</button>
+        <div id="hyplan-glint-status" class="hyplan-status"></div>
+        <div id="hyplan-glint-summary"></div>
+    </div>
+
+    <div class="hyplan-section">
+        <h3>5. Solar Position</h3>
+        <p style="font-size:11px; color:var(--color-c)">Plot solar zenith angle through the day at a chosen point. Pick a location on the map, or use the midpoint of a selected flight line.</p>
+        <button id="hyplan-pick-solar-point-btn">Plot at Map Point</button>
+        <button id="hyplan-cancel-pick-solar-btn" style="display:none">Cancel</button>
+        <button id="hyplan-solar-from-line-btn" disabled>Plot at Selected Line</button>
+        <button id="hyplan-hide-solar-btn" style="display:none">Hide Plot</button>
+        <div id="hyplan-solar-status" class="hyplan-status"></div>
+        <div id="hyplan-solar-plot"></div>
+        <div id="hyplan-solar-meta" style="font-size:11px; color:var(--color-c); margin-top:4px"></div>
+    </div>
+
+    <div class="hyplan-section">
+        <h3>6. Export</h3>
         <button id="hyplan-export-btn" disabled>Export KML + GPX</button>
         <div id="hyplan-export-status" class="hyplan-status"></div>
         <div id="hyplan-download-links"></div>
@@ -179,6 +255,8 @@ function interfaceWithMMGIS() {
     this.separateFromMMGIS = function () {
         separateFromMMGIS()
     }
+
+    installHyplanSelfHeal()
 
     const toolsContainer = $('#toolPanel')
     toolsContainer.css('background', 'var(--color-k)')
@@ -230,9 +308,7 @@ function interfaceWithMMGIS() {
             return r.json()
         })
         .then(data => {
-            if (windLayer) {
-                Map_.map.removeLayer(windLayer)
-            }
+            hyplanDisownAndRemove(windLayer)
             windLayer = window.L.velocityLayer({
                 displayValues: true,
                 displayOptions: {
@@ -248,7 +324,7 @@ function interfaceWithMMGIS() {
                 particleMultiplier: 1 / 300,
                 frameRate: 15,
             })
-            windLayer.addTo(Map_.map)
+            hyplanOwn(windLayer).addTo(Map_.map)
             $('#hyplan-wind-status').text(`Wind streamlines displayed (${windKind.toUpperCase()}).`)
             $('#hyplan-show-wind-btn').hide()
             $('#hyplan-hide-wind-btn').show()
@@ -263,10 +339,8 @@ function interfaceWithMMGIS() {
 
     // Hide Wind
     $('#hyplan-hide-wind-btn').on('click', function () {
-        if (windLayer) {
-            Map_.map.removeLayer(windLayer)
-            windLayer = null
-        }
+        hyplanDisownAndRemove(windLayer)
+        windLayer = null
         $('#hyplan-wind-status').text('')
         $('#hyplan-hide-wind-btn').hide()
         $('#hyplan-show-wind-btn').show()
@@ -332,6 +406,72 @@ function interfaceWithMMGIS() {
         bounds.getEast(),
         bounds.getNorth(),
     ]
+
+    // --- Optimize Azimuth (min glint) ---
+    $('#hyplan-optimize-azimuth-btn').on('click', function () {
+        const polygon = getDrawnPolygon()
+        if (!polygon) {
+            $('#hyplan-optimize-azimuth-status').text('Error: Draw a polygon first; the azimuth sweep uses its centroid as the test point.')
+            return
+        }
+        const altVal = parseFloat($('#hyplan-altitude').val())
+        if (isNaN(altVal) || altVal <= 0) {
+            $('#hyplan-optimize-azimuth-status').text('Error: Altitude must be a positive number.')
+            return
+        }
+        const sensor = $('#hyplan-sensor').val()
+        if (!sensor) {
+            $('#hyplan-optimize-azimuth-status').text('Error: Select a sensor first.')
+            return
+        }
+        const takeoffTimeVal = $('#hyplan-takeoff-time').val()
+        if (!takeoffTimeVal) {
+            $('#hyplan-optimize-azimuth-status').text('Error: Set a takeoff time (UTC) first — Section 1.')
+            return
+        }
+        const takeoffTime = takeoffTimeVal + ':00Z'
+        const centroid = polygonCentroid(polygon)
+        if (!centroid) {
+            $('#hyplan-optimize-azimuth-status').text('Error: Could not compute polygon centroid.')
+            return
+        }
+
+        $('#hyplan-optimize-azimuth-status').text('Sweeping headings…')
+        $('#hyplan-optimize-azimuth-btn').prop('disabled', true)
+
+        fetch(`${SERVICE_URL}/optimize-azimuth`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                lat: centroid.lat,
+                lon: centroid.lon,
+                altitude_msl_m: altVal,
+                sensor: sensor,
+                takeoff_time: takeoffTime,
+            }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail || data.message) {
+                $('#hyplan-optimize-azimuth-status').text('Error: ' + getErrorMessage(data))
+                return
+            }
+            $('#hyplan-azimuth').val(data.optimal_azimuth.toFixed(0))
+            renderAzimuthSweepPlot(data)
+            const warnPrefix = data.sun_below_horizon ? '⚠ Sun below horizon — ' : ''
+            $('#hyplan-optimize-azimuth-status').html(
+                `${warnPrefix}Optimal azimuth: <b>${data.optimal_azimuth.toFixed(0)}°</b> ` +
+                `(${data.criterion === 'max_mean' ? 'mean' : 'min'} glint ${data.optimal_value.toFixed(1)}°). ` +
+                `Filled into the field above.`
+            )
+        })
+        .catch(err => {
+            $('#hyplan-optimize-azimuth-status').text('Error: ' + err.message)
+        })
+        .finally(() => {
+            $('#hyplan-optimize-azimuth-btn').prop('disabled', false)
+        })
+    })
 
     // --- Generate button ---
     $('#hyplan-generate-btn').on('click', function () {
@@ -479,21 +619,20 @@ function interfaceWithMMGIS() {
 
     // --- Compute button ---
     $('#hyplan-compute-btn').on('click', function () {
-        if (selectedLineIds.length === 0 && patternWaypoints.length === 0) {
-            $('#hyplan-compute-status').text('Select flight lines or generate a pattern first.')
+        if (selectedLineIds.length === 0 && patternRefsForCompute.length === 0) {
+            $('#hyplan-compute-status').text('Select flight lines or include a pattern first.')
             return
         }
 
         const aircraft = $('#hyplan-aircraft').val()
-        // Build sequence: selected flight lines + pattern waypoints
+        // Build sequence: selected flight lines, then any waypoint patterns marked for compute.
         const sequence = selectedLineIds.map(lid => ({
             kind: 'line',
             line_id: lid,
         }))
-        // Append pattern waypoints if any
-        if (patternWaypoints.length > 0) {
-            patternWaypoints.forEach(wp => sequence.push(wp))
-        }
+        patternRefsForCompute.forEach(pid => {
+            sequence.push({ kind: 'pattern', pattern_id: pid })
+        })
 
         // Build wind config
         const windKind = $('#hyplan-wind-kind').val()
@@ -554,10 +693,8 @@ function interfaceWithMMGIS() {
 
     // --- Clear Plan ---
     $('#hyplan-clear-plan-btn').on('click', function () {
-        if (planLayer) {
-            Map_.map.removeLayer(planLayer)
-            planLayer = null
-        }
+        hyplanDisownAndRemove(planLayer)
+        planLayer = null
         $('#hyplan-summary').empty()
         $('#hyplan-compute-status').text('')
         $('#hyplan-export-btn').prop('disabled', true)
@@ -598,8 +735,8 @@ function interfaceWithMMGIS() {
                 $('#hyplan-swath-status').text('Error: ' + getErrorMessage(data))
                 return
             }
-            if (swathLayer) Map_.map.removeLayer(swathLayer)
-            swathLayer = window.L.geoJSON(data.swaths, {
+            hyplanDisownAndRemove(swathLayer)
+            swathLayer = hyplanOwn(window.L.geoJSON(data.swaths, {
                 style: {
                     color: '#8b5cf6',
                     weight: 1,
@@ -609,7 +746,7 @@ function interfaceWithMMGIS() {
                 onEachFeature: function (feature, layer) {
                     layer.bindTooltip(feature.properties.site_name || '', { sticky: true })
                 },
-            }).addTo(Map_.map)
+            })).addTo(Map_.map)
 
             let status = `${data.count} swath(s) displayed.`
             if (data.gap_overlap && data.gap_overlap.total_pairs > 0) {
@@ -629,13 +766,100 @@ function interfaceWithMMGIS() {
 
     // --- Hide Swaths ---
     $('#hyplan-hide-swaths-btn').on('click', function () {
-        if (swathLayer) {
-            Map_.map.removeLayer(swathLayer)
-            swathLayer = null
-        }
+        hyplanDisownAndRemove(swathLayer)
+        swathLayer = null
         $('#hyplan-swath-status').text('')
         $('#hyplan-hide-swaths-btn').hide()
         $('#hyplan-show-swaths-btn').show()
+    })
+
+    // --- Compute Glint ---
+    $('#hyplan-show-glint-btn').on('click', function () {
+        if (!campaignId || selectedLineIds.length === 0) {
+            $('#hyplan-glint-status').text('Select lines first.')
+            return
+        }
+        const sensor = $('#hyplan-sensor').val()
+        if (!sensor) {
+            $('#hyplan-glint-status').text('Select a sensor first.')
+            return
+        }
+        const takeoffTimeVal = $('#hyplan-takeoff-time').val()
+        if (!takeoffTimeVal) {
+            $('#hyplan-glint-status').text('Set a takeoff time in Section 1 first.')
+            return
+        }
+        const takeoffTime = takeoffTimeVal + ':00Z'
+        const threshold = parseFloat($('#hyplan-glint-threshold').val()) || 25.0
+
+        $('#hyplan-glint-status').text('Computing glint…')
+        $('#hyplan-show-glint-btn').prop('disabled', true)
+
+        fetch(`${SERVICE_URL}/compute-glint`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                campaign_id: campaignId,
+                line_ids: selectedLineIds,
+                sensor: sensor,
+                takeoff_time: takeoffTime,
+                threshold_deg: threshold,
+            }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail || data.message) {
+                $('#hyplan-glint-status').text('Error: ' + getErrorMessage(data))
+                return
+            }
+            hyplanDisownAndRemove(glintLayer)
+            glintLayer = hyplanOwn(window.L.geoJSON(data.glint, {
+                pointToLayer: function (feature, latlng) {
+                    const ga = feature.properties.glint_angle
+                    return window.L.circleMarker(latlng, {
+                        radius: 3,
+                        stroke: false,
+                        fillColor: glintColor(ga),
+                        fillOpacity: 0.85,
+                        interactive: false,
+                    })
+                },
+            })).addTo(Map_.map)
+
+            renderGlintSummary(data.summary, data.threshold_deg)
+            const nFeat = (data.glint && data.glint.features) ? data.glint.features.length : 0
+            const status = $('#hyplan-glint-status')
+            status.empty()
+            if (data.sun_below_horizon) {
+                status.append(
+                    '<div style="color:#ef4444; font-weight:bold; padding:4px 0">' +
+                    '⚠ Sun is below the horizon at this time &amp; location.' +
+                    '</div>'
+                )
+                if (data.warnings && data.warnings.length) {
+                    status.append(`<div>${data.warnings[0]}</div>`)
+                }
+            }
+            status.append(`<div>${nFeat} samples plotted at threshold ${data.threshold_deg}°.</div>`)
+            $('#hyplan-show-glint-btn').hide()
+            $('#hyplan-hide-glint-btn').show()
+        })
+        .catch(err => {
+            $('#hyplan-glint-status').text('Error: ' + err.message)
+        })
+        .finally(() => {
+            $('#hyplan-show-glint-btn').prop('disabled', false)
+        })
+    })
+
+    // --- Hide Glint ---
+    $('#hyplan-hide-glint-btn').on('click', function () {
+        hyplanDisownAndRemove(glintLayer)
+        glintLayer = null
+        $('#hyplan-glint-status').text('')
+        $('#hyplan-glint-summary').empty()
+        $('#hyplan-hide-glint-btn').hide()
+        $('#hyplan-show-glint-btn').show()
     })
 
     // --- Export button ---
@@ -880,6 +1104,11 @@ function interfaceWithMMGIS() {
             { id: 'pp-n-turns', label: 'Number of Turns', value: 3 },
             { id: 'pp-direction', label: 'Direction (right/left)', value: 'right', type: 'text' },
         ],
+        glint_arc: [
+            { id: 'pp-bank-angle', label: 'Bank Angle (deg, blank = auto)', value: '' },
+            { id: 'pp-bank-direction', label: 'Bank Direction (right/left)', value: 'right', type: 'text' },
+            { id: 'pp-collection-length', label: 'Collection Length (m, blank = full arc)', value: '' },
+        ],
     }
 
     function renderPatternParams(pattern) {
@@ -920,6 +1149,21 @@ function interfaceWithMMGIS() {
         $('#hyplan-generate-pattern-btn').prop('disabled', true)
     })
 
+    // Patterns list: delete + include-in-compute checkbox
+    $('#hyplan-patterns-list').on('click', '.hyplan-pattern-delete', function () {
+        const pid = $(this).data('pid')
+        if (pid) deletePattern(pid)
+    })
+    $('#hyplan-patterns-list').on('change', '.hyplan-pattern-include', function () {
+        const pid = $(this).data('pid')
+        if (!pid) return
+        if (this.checked) {
+            if (patternRefsForCompute.indexOf(pid) < 0) patternRefsForCompute.push(pid)
+        } else {
+            patternRefsForCompute = patternRefsForCompute.filter(id => id !== pid)
+        }
+    })
+
     function onPatternCenterClick(e) {
         patternCenter = e.latlng
         patternCenterMode = false
@@ -929,6 +1173,56 @@ function interfaceWithMMGIS() {
         $('#hyplan-generate-pattern-btn').prop('disabled', false)
         $('#hyplan-pattern-status').text(`Center: (${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)})`)
     }
+
+    // --- Section 5: Solar Position --------------------------------------
+    $('#hyplan-pick-solar-point-btn').on('click', function () {
+        solarPickMode = true
+        $('#hyplan-pick-solar-point-btn').hide()
+        $('#hyplan-cancel-pick-solar-btn').show()
+        $('#hyplan-solar-status').text('Click the map to plot solar zenith here.')
+        Map_.map.on('click', onSolarPickClick)
+    })
+
+    $('#hyplan-cancel-pick-solar-btn').on('click', function () {
+        solarPickMode = false
+        Map_.map.off('click', onSolarPickClick)
+        $('#hyplan-cancel-pick-solar-btn').hide()
+        $('#hyplan-pick-solar-point-btn').show()
+        $('#hyplan-solar-status').text('')
+    })
+
+    function onSolarPickClick(e) {
+        solarPickMode = false
+        Map_.map.off('click', onSolarPickClick)
+        $('#hyplan-cancel-pick-solar-btn').hide()
+        $('#hyplan-pick-solar-point-btn').show()
+        showSolarMarker(e.latlng.lat, e.latlng.lng)
+        requestAndRenderSolar(e.latlng.lat, e.latlng.lng)
+    }
+
+    $('#hyplan-solar-from-line-btn').on('click', function () {
+        if (selectedLineIds.length === 0) {
+            $('#hyplan-solar-status').text('Select a flight line first.')
+            return
+        }
+        const targetId = selectedLineIds[0]
+        const mid = midpointOfFlightLine(targetId)
+        if (!mid) {
+            $('#hyplan-solar-status').text(`Could not locate line '${targetId}' on the map.`)
+            return
+        }
+        showSolarMarker(mid.lat, mid.lon)
+        requestAndRenderSolar(mid.lat, mid.lon)
+    })
+
+    $('#hyplan-hide-solar-btn').on('click', function () {
+        hyplanDisownAndRemove(solarMarkerLayer)
+        solarMarkerLayer = null
+        $('#hyplan-solar-plot').empty()
+        $('#hyplan-solar-meta').empty()
+        $('#hyplan-solar-status').text('')
+        $('#hyplan-hide-solar-btn').hide()
+    })
 
     $('#hyplan-generate-pattern-btn').on('click', function () {
         if (!patternCenter) return
@@ -962,6 +1256,19 @@ function interfaceWithMMGIS() {
         if (pp['pp-alt-end'] !== undefined) params.altitude_end_m = pp['pp-alt-end']
         if (pp['pp-n-turns'] !== undefined) params.n_turns = pp['pp-n-turns']
         if (pp['pp-direction'] !== undefined) params.direction = pp['pp-direction']
+        // glint_arc params
+        if (pp['pp-bank-angle'] !== undefined && pp['pp-bank-angle'] !== '') {
+            params.bank_angle = pp['pp-bank-angle']
+        }
+        if (pp['pp-bank-direction'] !== undefined) params.bank_direction = pp['pp-bank-direction']
+        if (pp['pp-collection-length'] !== undefined && pp['pp-collection-length'] !== '') {
+            params.collection_length_m = pp['pp-collection-length']
+        }
+
+        // takeoff_time + aircraft only required by glint_arc; harmless to send always
+        const takeoffTimeVal = $('#hyplan-takeoff-time').val()
+        const takeoffTime = takeoffTimeVal ? takeoffTimeVal + ':00Z' : null
+        const aircraftSel = $('#hyplan-aircraft').val() || null
 
         const bounds = Map_.map.getBounds()
         const campaignBounds = [
@@ -985,6 +1292,8 @@ function interfaceWithMMGIS() {
                 heading: heading,
                 altitude_msl_m: altitude,
                 params: params,
+                takeoff_time: takeoffTime,
+                aircraft: aircraftSel,
             }),
         })
         .then(r => r.json())
@@ -994,35 +1303,39 @@ function interfaceWithMMGIS() {
                 return
             }
             campaignId = data.campaign_id
-            // Display pattern on map
-            if (patternLayer) Map_.map.removeLayer(patternLayer)
-            patternLayer = window.L.geoJSON(data.waypoints, {
-                style: { color: '#f59e0b', weight: 3, opacity: 0.9, dashArray: '5 5' },
-                pointToLayer: function (feature, latlng) {
-                    return window.L.circleMarker(latlng, {
-                        radius: 5, fillColor: '#f59e0b', color: '#fff',
-                        weight: 1, opacity: 1, fillOpacity: 0.8,
-                    })
-                },
-                onEachFeature: function (feature, layer) {
-                    if (feature.properties.name) {
-                        layer.bindTooltip(feature.properties.name, { sticky: true })
-                    }
-                },
-            }).addTo(Map_.map)
-            // Store waypoints for compute
-            patternWaypoints = []
-            data.waypoints.features.forEach(function (f) {
-                if (f.geometry.type === 'Point') {
-                    patternWaypoints.push({
-                        kind: 'waypoint',
-                        latitude: f.geometry.coordinates[1],
-                        longitude: f.geometry.coordinates[0],
-                        altitude_msl_m: f.properties.altitude_msl || parseFloat($('#hyplan-altitude').val()) || 3000,
-                    })
+
+            // Refresh flight lines (line-based pattern legs are included).
+            if (data.flight_lines) {
+                displayFlightLines(data.flight_lines)
+                updateLineList(data.flight_lines)
+            }
+
+            // Refresh the patterns map layer + UI list.
+            if (data.patterns) {
+                renderPatternsLayer(data.patterns)
+            }
+
+            // Auto-include newly-generated waypoint patterns in compute.
+            if (data.is_line_based === false && data.pattern_id) {
+                if (patternRefsForCompute.indexOf(data.pattern_id) < 0) {
+                    patternRefsForCompute.push(data.pattern_id)
                 }
+            }
+
+            // Refresh the patterns list. Use the new pattern's metadata
+            // until the next /patterns fetch.
+            patternsCache.push({
+                pattern_id: data.pattern_id,
+                kind: data.pattern_kind,
+                name: data.pattern_name,
+                is_line_based: data.is_line_based,
             })
-            $('#hyplan-pattern-status').text(`Generated ${data.waypoint_count} waypoints (${pattern}). Will be included in compute.`)
+            renderPatternsList()
+
+            const label = data.is_line_based ? 'flight lines' : 'waypoints'
+            $('#hyplan-pattern-status').text(
+                `Generated ${data.pattern_name} (${data.pattern_kind}). Added to campaign as ${label}.`
+            )
         })
         .catch(err => {
             $('#hyplan-pattern-status').text('Error: ' + err.message)
@@ -1096,26 +1409,13 @@ function interfaceWithMMGIS() {
             Map_.map.removeLayer(boxSelectRect)
             boxSelectRect = null
         }
-        if (flightLineLayer) {
-            Map_.map.removeLayer(flightLineLayer)
-            flightLineLayer = null
-        }
-        if (planLayer) {
-            Map_.map.removeLayer(planLayer)
-            planLayer = null
-        }
-        if (windLayer) {
-            Map_.map.removeLayer(windLayer)
-            windLayer = null
-        }
-        if (patternLayer) {
-            Map_.map.removeLayer(patternLayer)
-            patternLayer = null
-        }
-        if (swathLayer) {
-            Map_.map.removeLayer(swathLayer)
-            swathLayer = null
-        }
+        hyplanDisownAndRemove(flightLineLayer); flightLineLayer = null
+        hyplanDisownAndRemove(planLayer); planLayer = null
+        hyplanDisownAndRemove(windLayer); windLayer = null
+        hyplanDisownAndRemove(patternsLayer); patternsLayer = null
+        hyplanDisownAndRemove(swathLayer); swathLayer = null
+        hyplanDisownAndRemove(glintLayer); glintLayer = null
+        hyplanDisownAndRemove(solarMarkerLayer); solarMarkerLayer = null
         campaignId = null
         selectedLineIds = []
     }
@@ -1144,12 +1444,8 @@ function getDrawnPolygon() {
 }
 
 function displayFlightLines(geojson) {
-    console.log('HyPlan: displayFlightLines called with', geojson.features ? geojson.features.length : 0, 'features')
-    console.log('HyPlan: Map_.map exists:', !!Map_.map, 'window.L exists:', !!window.L)
-    if (flightLineLayer) {
-        Map_.map.removeLayer(flightLineLayer)
-    }
-    flightLineLayer = window.L.geoJSON(geojson, {
+    hyplanDisownAndRemove(flightLineLayer)
+    flightLineLayer = hyplanOwn(window.L.geoJSON(geojson, {
         interactive: true,
         style: function (feature) {
             return {
@@ -1166,7 +1462,7 @@ function displayFlightLines(geojson) {
                 toggleLineSelection(lineId)
             })
         },
-    }).addTo(Map_.map)
+    })).addTo(Map_.map)
 
     // Zoom map to show all lines
     try {
@@ -1178,9 +1474,7 @@ function displayFlightLines(geojson) {
 }
 
 function displayPlan(geojson) {
-    if (planLayer) {
-        Map_.map.removeLayer(planLayer)
-    }
+    hyplanDisownAndRemove(planLayer)
     const segmentColors = {
         takeoff: '#ef4444',
         climb: '#f97316',
@@ -1189,7 +1483,7 @@ function displayPlan(geojson) {
         flight_line: '#22c55e',
         approach: '#8b5cf6',
     }
-    planLayer = window.L.geoJSON(geojson, {
+    planLayer = hyplanOwn(window.L.geoJSON(geojson, {
         style: function (feature) {
             const segType = feature.properties.segment_type || 'transit'
             return {
@@ -1206,7 +1500,7 @@ function displayPlan(geojson) {
                 { sticky: true }
             )
         },
-    }).addTo(Map_.map)
+    })).addTo(Map_.map)
 }
 
 function updateLineList(geojson) {
@@ -1304,17 +1598,606 @@ function updateSelectionStatus() {
     const total = $('.hyplan-line-item').length
     const selected = selectedLineIds.length
     $('#hyplan-selection-status').text(`${selected} of ${total} selected`)
-    $('#hyplan-compute-btn').prop('disabled', selected === 0 && patternWaypoints.length === 0)
+    $('#hyplan-compute-btn').prop('disabled', selected === 0 && patternRefsForCompute.length === 0)
     $('#hyplan-optimize-btn').prop('disabled', selected < 2)
     $('#hyplan-delete-line-btn').prop('disabled', selected === 0)
     $('#hyplan-transform-btn').prop('disabled', selected === 0)
     $('#hyplan-show-swaths-btn').prop('disabled', selected === 0)
+    $('#hyplan-show-glint-btn').prop('disabled', selected === 0)
+    $('#hyplan-solar-from-line-btn').prop('disabled', selected === 0)
 }
 
 function getErrorMessage(data) {
     if (data.detail) return typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
     if (data.message) return data.message
     return 'Unknown error'
+}
+
+// Approximation of Matplotlib RdYlBu colormap with PowerNorm(gamma=0.4, vmin=0, vmax=90)
+// to match notebooks/glint_analysis.ipynb Cell 10 styling. Red = low glint angle (bad,
+// near-specular), blue = high (good).
+const _GLINT_RDYLBU_STOPS = [
+    [0.00, [165,   0,  38]],
+    [0.10, [215,  48,  39]],
+    [0.20, [244, 109,  67]],
+    [0.30, [253, 174,  97]],
+    [0.40, [254, 224, 144]],
+    [0.50, [255, 255, 191]],
+    [0.60, [224, 243, 248]],
+    [0.70, [171, 217, 233]],
+    [0.80, [116, 173, 209]],
+    [0.90, [ 69, 117, 180]],
+    [1.00, [ 49,  54, 149]],
+]
+
+function glintColor(angleDeg) {
+    if (angleDeg == null || isNaN(angleDeg)) return '#888'
+    const x = Math.max(0, Math.min(angleDeg, 90)) / 90
+    const t = Math.pow(x, 0.4)  // PowerNorm(gamma=0.4)
+    let lo = _GLINT_RDYLBU_STOPS[0]
+    let hi = _GLINT_RDYLBU_STOPS[_GLINT_RDYLBU_STOPS.length - 1]
+    for (let i = 1; i < _GLINT_RDYLBU_STOPS.length; i++) {
+        if (t <= _GLINT_RDYLBU_STOPS[i][0]) {
+            lo = _GLINT_RDYLBU_STOPS[i - 1]
+            hi = _GLINT_RDYLBU_STOPS[i]
+            break
+        }
+    }
+    const span = hi[0] - lo[0]
+    const frac = span > 0 ? (t - lo[0]) / span : 0
+    const r = Math.round(lo[1][0] + (hi[1][0] - lo[1][0]) * frac)
+    const g = Math.round(lo[1][1] + (hi[1][1] - lo[1][1]) * frac)
+    const b = Math.round(lo[1][2] + (hi[1][2] - lo[1][2]) * frac)
+    return `rgb(${r}, ${g}, ${b})`
+}
+
+function renderGlintSummary(summary, thresholdDeg) {
+    const $box = $('#hyplan-glint-summary')
+    $box.empty()
+    if (!summary || summary.length === 0) return
+    const fmt = v => (v == null ? '—' : Number(v).toFixed(1))
+    const fmtPct = v => (v == null ? '—' : (Number(v) * 100).toFixed(1) + '%')
+    const sunFlag = z => (z != null && z > 90 ? ' ⚠' : '')
+    const header = `<div class="hyplan-glint-row hyplan-glint-header">
+        <span class="hyplan-glint-name">Line</span>
+        <span class="hyplan-glint-num">sun°</span>
+        <span class="hyplan-glint-num">mean</span>
+        <span class="hyplan-glint-num">min</span>
+        <span class="hyplan-glint-num">&lt; ${thresholdDeg}°</span>
+    </div>`
+    $box.append(header)
+    summary.forEach(function (s) {
+        const row = `<div class="hyplan-glint-row">
+            <span class="hyplan-glint-name" title="${s.line_id}">${s.site_name || s.line_id}</span>
+            <span class="hyplan-glint-num">${fmt(s.solar_zenith)}°${sunFlag(s.solar_zenith)}</span>
+            <span class="hyplan-glint-num">${fmt(s.mean_glint)}°</span>
+            <span class="hyplan-glint-num">${fmt(s.min_glint)}°</span>
+            <span class="hyplan-glint-num">${fmtPct(s.fraction_below_threshold)}</span>
+        </div>`
+        $box.append(row)
+    })
+}
+
+function renderPatternsLayer(geojson) {
+    // HyPlan's patterns_to_geojson() emits features only for waypoint-based
+    // patterns (polygon, sawtooth, spiral). Line-based patterns (rosette,
+    // racetrack) are rendered via the flight_lines layer, so nothing shows up
+    // here for them.
+    hyplanDisownAndRemove(patternsLayer)
+    patternsLayer = null
+    if (!geojson || !geojson.features || geojson.features.length === 0) return
+    patternsLayer = hyplanOwn(window.L.geoJSON(geojson, {
+        style: function () {
+            return { color: '#f59e0b', weight: 2, opacity: 0.85, dashArray: '4 4' }
+        },
+        pointToLayer: function (feature, latlng) {
+            return window.L.circleMarker(latlng, {
+                radius: 4, fillColor: '#f59e0b', color: '#fff',
+                weight: 1, opacity: 1, fillOpacity: 0.85,
+            })
+        },
+        onEachFeature: function (feature, layer) {
+            const p = feature.properties || {}
+            const label = p.name || p.pattern_kind
+            if (label) layer.bindTooltip(label, { sticky: true })
+        },
+    })).addTo(Map_.map)
+}
+
+function renderPatternsList() {
+    const $list = $('#hyplan-patterns-list')
+    $list.empty()
+    if (patternsCache.length === 0) {
+        $list.append('<p class="hyplan-empty">No patterns in this campaign.</p>')
+        return
+    }
+    patternsCache.forEach(function (pat) {
+        const inCompute = patternRefsForCompute.indexOf(pat.pattern_id) >= 0
+        const checkbox = pat.is_line_based
+            ? ''  // line-based legs included via line selection
+            : `<input type="checkbox" class="hyplan-pattern-include" data-pid="${pat.pattern_id}" ${inCompute ? 'checked' : ''} title="Include in compute" />`
+        const row = $(
+            `<div class="hyplan-pattern-item" data-pid="${pat.pattern_id}">
+                ${checkbox}
+                <span class="hyplan-pattern-name">${pat.name} <small>(${pat.kind})</small></span>
+                <button class="hyplan-pattern-delete" data-pid="${pat.pattern_id}">Delete</button>
+            </div>`
+        )
+        $list.append(row)
+    })
+}
+
+function refreshPatternsCache() {
+    if (!campaignId) return Promise.resolve()
+    return fetch(`${SERVICE_URL}/patterns/${campaignId}`)
+        .then(r => r.json())
+        .then(data => {
+            patternsCache = (data.patterns || []).map(p => ({
+                pattern_id: p.pattern_id,
+                kind: p.kind,
+                name: p.name,
+                is_line_based: p.is_line_based,
+            }))
+            // Drop refs to patterns that no longer exist
+            const ids = new Set(patternsCache.map(p => p.pattern_id))
+            patternRefsForCompute = patternRefsForCompute.filter(id => ids.has(id))
+            renderPatternsList()
+        })
+        .catch(() => { /* non-fatal */ })
+}
+
+function deletePattern(patternId) {
+    if (!campaignId) return
+    fetch(`${SERVICE_URL}/delete-pattern`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaign_id: campaignId, pattern_id: patternId }),
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail) {
+                $('#hyplan-pattern-status').text('Delete failed: ' + getErrorMessage(data))
+                return
+            }
+            displayFlightLines(data.flight_lines)
+            updateLineList(data.flight_lines)
+            renderPatternsLayer(data.patterns)
+            patternsCache = patternsCache.filter(p => p.pattern_id !== patternId)
+            patternRefsForCompute = patternRefsForCompute.filter(id => id !== patternId)
+            renderPatternsList()
+            $('#hyplan-pattern-status').text(`Deleted pattern ${patternId}.`)
+        })
+        .catch(err => {
+            $('#hyplan-pattern-status').text('Delete error: ' + err.message)
+        })
+}
+
+// --- Solar Position helpers ---
+
+function showSolarMarker(lat, lon) {
+    hyplanDisownAndRemove(solarMarkerLayer)
+    solarMarkerLayer = hyplanOwn(window.L.circleMarker([lat, lon], {
+        radius: 6,
+        color: '#ffffff',
+        weight: 2,
+        fillColor: '#facc15',
+        fillOpacity: 0.95,
+    }))
+    solarMarkerLayer.addTo(Map_.map)
+    solarMarkerLayer.bindTooltip(`Solar plot point (${lat.toFixed(4)}, ${lon.toFixed(4)})`, { sticky: true })
+}
+
+function midpointOfFlightLine(lineId) {
+    if (!flightLineLayer) return null
+    let mid = null
+    flightLineLayer.eachLayer(function (layer) {
+        const f = layer.feature
+        if (!f) return
+        const fid = (f.properties && f.properties.line_id) || f.id
+        if (fid !== lineId) return
+        // Prefer geometry coords for an exact midpoint of the LineString
+        try {
+            const coords = f.geometry.coordinates
+            const a = coords[0], b = coords[coords.length - 1]
+            mid = { lat: (a[1] + b[1]) / 2, lon: (a[0] + b[0]) / 2 }
+        } catch (e) {
+            // Fall back to layer bounds center
+            try {
+                const c = layer.getBounds().getCenter()
+                mid = { lat: c.lat, lon: c.lng }
+            } catch (_) { /* leave mid null */ }
+        }
+    })
+    return mid
+}
+
+function requestAndRenderSolar(lat, lon) {
+    // Date: from takeoff_time if set, else today (UTC)
+    const takeoffTimeVal = $('#hyplan-takeoff-time').val()
+    let date
+    if (takeoffTimeVal && takeoffTimeVal.length >= 10) {
+        date = takeoffTimeVal.slice(0, 10)
+    } else {
+        date = new Date().toISOString().slice(0, 10)
+    }
+
+    $('#hyplan-solar-status').text('Computing solar positions…')
+    $('#hyplan-hide-solar-btn').show()
+
+    fetch(`${SERVICE_URL}/solar-position`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat: lat, lon: lon, date: date }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.detail || data.message) {
+            $('#hyplan-solar-status').text('Error: ' + getErrorMessage(data))
+            return
+        }
+        renderSolarPlot(data, takeoffTimeVal)
+        $('#hyplan-solar-status').text(`Plotted ${data.zenith_deg.length} samples for ${data.date}.`)
+    })
+    .catch(err => {
+        $('#hyplan-solar-status').text('Error: ' + err.message)
+    })
+}
+
+function polygonCentroid(geojsonFeature) {
+    // Average of unique vertices (good enough for the small polygons drawn here).
+    if (!geojsonFeature || !geojsonFeature.geometry) return null
+    const geom = geojsonFeature.geometry
+    let rings = []
+    if (geom.type === 'Polygon') {
+        rings = geom.coordinates  // [[ [lon,lat], ... ]]
+    } else if (geom.type === 'MultiPolygon') {
+        rings = geom.coordinates[0]  // outer of first poly
+    } else {
+        return null
+    }
+    const outer = rings[0] || []
+    if (outer.length === 0) return null
+    let sumLat = 0, sumLon = 0, n = 0
+    // skip the duplicate closing vertex if present
+    const last = outer[outer.length - 1]
+    const first = outer[0]
+    const closed = last && first && last[0] === first[0] && last[1] === first[1]
+    const stop = closed ? outer.length - 1 : outer.length
+    for (let i = 0; i < stop; i++) {
+        sumLon += outer[i][0]
+        sumLat += outer[i][1]
+        n++
+    }
+    if (n === 0) return null
+    return { lat: sumLat / n, lon: sumLon / n }
+}
+
+function renderAzimuthSweepPlot(data) {
+    const $box = $('#hyplan-optimize-azimuth-plot')
+    $box.empty()
+
+    const W = 300, H = 150
+    const PAD_L = 36, PAD_R = 14, PAD_T = 12, PAD_B = 24
+    const innerW = W - PAD_L - PAD_R
+    const innerH = H - PAD_T - PAD_B
+    const xMin = 0, xMax = 360
+    const yMin = 0, yMax = 90    // glint angle range to display
+    const xToPx = h => PAD_L + ((h - xMin) / (xMax - xMin)) * innerW
+    const yToPx = v => PAD_T + (1 - (v - yMin) / (yMax - yMin)) * innerH  // inverted: high glint at top
+
+    const svgNS = 'http://www.w3.org/2000/svg'
+    const svg = document.createElementNS(svgNS, 'svg')
+    svg.setAttribute('width', W)
+    svg.setAttribute('height', H)
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`)
+    svg.setAttribute('class', 'hyplan-solar-svg')
+
+    function makeEl(name, attrs) {
+        const el = document.createElementNS(svgNS, name)
+        for (const k in attrs) el.setAttribute(k, attrs[k])
+        return el
+    }
+
+    // Background
+    svg.appendChild(makeEl('rect', {
+        x: PAD_L, y: PAD_T, width: innerW, height: innerH,
+        fill: '#1a1a1a', stroke: '#444', 'stroke-width': 1,
+    }))
+
+    // Y-axis ticks
+    for (let v = 0; v <= 90; v += 30) {
+        const y = yToPx(v)
+        svg.appendChild(makeEl('line', {
+            x1: PAD_L - 3, y1: y, x2: PAD_L, y2: y,
+            stroke: '#888', 'stroke-width': 1,
+        }))
+        const t = makeEl('text', {
+            x: PAD_L - 5, y: y + 3,
+            'text-anchor': 'end',
+            class: 'hyplan-solar-axis',
+        })
+        t.textContent = `${v}°`
+        svg.appendChild(t)
+    }
+    // X-axis ticks every 90°
+    for (let h = 0; h <= 360; h += 90) {
+        const x = xToPx(h)
+        svg.appendChild(makeEl('line', {
+            x1: x, y1: PAD_T + innerH, x2: x, y2: PAD_T + innerH + 3,
+            stroke: '#888', 'stroke-width': 1,
+        }))
+        const t = makeEl('text', {
+            x: x, y: PAD_T + innerH + 14,
+            'text-anchor': 'middle',
+            class: 'hyplan-solar-axis',
+        })
+        t.textContent = `${h}`
+        svg.appendChild(t)
+    }
+    // X-axis label
+    const xLabel = makeEl('text', {
+        x: PAD_L + innerW / 2, y: H - 4,
+        'text-anchor': 'middle',
+        class: 'hyplan-solar-axis hyplan-solar-axis-label',
+    })
+    xLabel.textContent = 'Heading (deg)'
+    svg.appendChild(xLabel)
+
+    // Threshold line at 25°
+    const yThresh = yToPx(25)
+    svg.appendChild(makeEl('line', {
+        x1: PAD_L, y1: yThresh, x2: PAD_L + innerW, y2: yThresh,
+        stroke: '#ef4444', 'stroke-width': 1, 'stroke-dasharray': '3 3',
+    }))
+    const threshLabel = makeEl('text', {
+        x: PAD_L + innerW - 2, y: yThresh - 3,
+        'text-anchor': 'end',
+        class: 'hyplan-solar-axis',
+        fill: '#ef4444',
+    })
+    threshLabel.textContent = '25°'
+    svg.appendChild(threshLabel)
+
+    // Polylines for mean and min glint, clipped to [0, 90]
+    function polyline(values, color, dash) {
+        const pts = []
+        for (let i = 0; i < data.headings.length; i++) {
+            const v = values[i]
+            if (v == null || isNaN(v)) continue
+            const clipped = Math.max(yMin, Math.min(yMax, v))
+            pts.push(`${xToPx(data.headings[i]).toFixed(1)},${yToPx(clipped).toFixed(1)}`)
+        }
+        const attrs = {
+            points: pts.join(' '),
+            fill: 'none',
+            stroke: color,
+            'stroke-width': 1.5,
+        }
+        if (dash) attrs['stroke-dasharray'] = dash
+        svg.appendChild(makeEl('polyline', attrs))
+    }
+    polyline(data.mean_glint, '#0ea5e9')        // mean = solid cyan
+    polyline(data.min_glint, '#facc15', '3 2')   // min = dashed yellow
+
+    // Vertical marker at the optimal heading
+    const xOpt = xToPx(data.optimal_azimuth)
+    svg.appendChild(makeEl('line', {
+        x1: xOpt, y1: PAD_T, x2: xOpt, y2: PAD_T + innerH,
+        stroke: '#22c55e', 'stroke-width': 1.5, 'stroke-dasharray': '4 3',
+    }))
+    const optLabel = makeEl('text', {
+        x: xOpt + 2, y: PAD_T + 10,
+        'text-anchor': 'start',
+        class: 'hyplan-solar-axis',
+        fill: '#22c55e',
+    })
+    optLabel.textContent = `opt ${data.optimal_azimuth.toFixed(0)}°`
+    svg.appendChild(optLabel)
+
+    // Solar azimuth marker
+    if (typeof data.solar_azimuth === 'number') {
+        const xSun = xToPx(((data.solar_azimuth % 360) + 360) % 360)
+        svg.appendChild(makeEl('line', {
+            x1: xSun, y1: PAD_T, x2: xSun, y2: PAD_T + innerH,
+            stroke: '#f59e0b', 'stroke-width': 1, 'stroke-dasharray': '2 4',
+        }))
+        const sLabel = makeEl('text', {
+            x: xSun + 2, y: PAD_T + innerH - 4,
+            'text-anchor': 'start',
+            class: 'hyplan-solar-axis',
+            fill: '#f59e0b',
+        })
+        sLabel.textContent = `sun-az ${data.solar_azimuth.toFixed(0)}°`
+        svg.appendChild(sLabel)
+    }
+
+    // Legend (bottom-right)
+    const legendX = PAD_L + innerW - 80
+    const legendY = PAD_T + 4
+    function legendEntry(yOffset, color, dash, label) {
+        const ly = legendY + yOffset
+        const ln = makeEl('line', {
+            x1: legendX, y1: ly, x2: legendX + 14, y2: ly,
+            stroke: color, 'stroke-width': 1.5,
+        })
+        if (dash) ln.setAttribute('stroke-dasharray', dash)
+        svg.appendChild(ln)
+        const t = makeEl('text', {
+            x: legendX + 17, y: ly + 3,
+            'text-anchor': 'start',
+            class: 'hyplan-solar-axis',
+        })
+        t.textContent = label
+        svg.appendChild(t)
+    }
+    legendEntry(0, '#0ea5e9', null, 'mean')
+    legendEntry(10, '#facc15', '3 2', 'min')
+
+    $box.append(svg)
+}
+
+function _hmsToHours(hms) {
+    // "HH:MM:SS" or "HH:MM" -> decimal hours UTC
+    if (!hms) return null
+    const parts = hms.split(':')
+    const h = parseInt(parts[0], 10)
+    const m = parts.length > 1 ? parseInt(parts[1], 10) : 0
+    const s = parts.length > 2 ? parseInt(parts[2], 10) : 0
+    return h + m / 60 + s / 3600
+}
+
+function renderSolarPlot(data, takeoffTimeLocalStr) {
+    const $box = $('#hyplan-solar-plot')
+    $box.empty()
+
+    const W = 300, H = 180
+    const PAD_L = 36, PAD_R = 14, PAD_T = 12, PAD_B = 24
+    const innerW = W - PAD_L - PAD_R
+    const innerH = H - PAD_T - PAD_B
+    const xMin = 0, xMax = 24            // hours UTC
+    const yMin = 0, yMax = 180           // zenith degrees (0 = overhead)
+    const xToPx = h => PAD_L + ((h - xMin) / (xMax - xMin)) * innerW
+    const yToPx = z => PAD_T + ((z - yMin) / (yMax - yMin)) * innerH  // not inverted — small zenith is at top
+
+    const svgNS = 'http://www.w3.org/2000/svg'
+    const svg = document.createElementNS(svgNS, 'svg')
+    svg.setAttribute('width', W)
+    svg.setAttribute('height', H)
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`)
+    svg.setAttribute('class', 'hyplan-solar-svg')
+
+    function makeEl(name, attrs) {
+        const el = document.createElementNS(svgNS, name)
+        for (const k in attrs) el.setAttribute(k, attrs[k])
+        return el
+    }
+
+    // Plot area background
+    svg.appendChild(makeEl('rect', {
+        x: PAD_L, y: PAD_T, width: innerW, height: innerH,
+        fill: '#1a1a1a', stroke: '#444', 'stroke-width': 1,
+    }))
+
+    // Y-axis ticks at every 30°
+    for (let z = 0; z <= 180; z += 30) {
+        const y = yToPx(z)
+        svg.appendChild(makeEl('line', {
+            x1: PAD_L - 3, y1: y, x2: PAD_L, y2: y,
+            stroke: '#888', 'stroke-width': 1,
+        }))
+        const t = makeEl('text', {
+            x: PAD_L - 5, y: y + 3,
+            'text-anchor': 'end',
+            class: 'hyplan-solar-axis',
+        })
+        t.textContent = `${z}°`
+        svg.appendChild(t)
+    }
+
+    // X-axis ticks every 6 h
+    for (let h = 0; h <= 24; h += 6) {
+        const x = xToPx(h)
+        svg.appendChild(makeEl('line', {
+            x1: x, y1: PAD_T + innerH, x2: x, y2: PAD_T + innerH + 3,
+            stroke: '#888', 'stroke-width': 1,
+        }))
+        const t = makeEl('text', {
+            x: x, y: PAD_T + innerH + 14,
+            'text-anchor': 'middle',
+            class: 'hyplan-solar-axis',
+        })
+        t.textContent = `${h.toString().padStart(2, '0')}`
+        svg.appendChild(t)
+    }
+    // X-axis label
+    const xLabel = makeEl('text', {
+        x: PAD_L + innerW / 2, y: H - 4,
+        'text-anchor': 'middle',
+        class: 'hyplan-solar-axis hyplan-solar-axis-label',
+    })
+    xLabel.textContent = 'Hour of day (UTC)'
+    svg.appendChild(xLabel)
+
+    // Horizon reference at zenith=90°
+    const yHorizon = yToPx(90)
+    svg.appendChild(makeEl('line', {
+        x1: PAD_L, y1: yHorizon, x2: PAD_L + innerW, y2: yHorizon,
+        stroke: '#9ca3af', 'stroke-width': 1, 'stroke-dasharray': '3 3',
+    }))
+    const horizonLabel = makeEl('text', {
+        x: PAD_L + innerW - 2, y: yHorizon - 3,
+        'text-anchor': 'end',
+        class: 'hyplan-solar-axis',
+    })
+    horizonLabel.textContent = 'horizon'
+    svg.appendChild(horizonLabel)
+
+    // Zenith polyline
+    const pts = data.zenith_deg.map((z, i) => {
+        const h = _hmsToHours(data.time_utc[i])
+        return `${xToPx(h).toFixed(1)},${yToPx(z).toFixed(1)}`
+    }).join(' ')
+    svg.appendChild(makeEl('polyline', {
+        points: pts,
+        fill: 'none',
+        stroke: '#0ea5e9',
+        'stroke-width': 1.5,
+    }))
+
+    // Sunrise / sunset markers
+    function drawMarker(hms, color, label) {
+        const h = _hmsToHours(hms)
+        if (h == null) return
+        const x = xToPx(h)
+        svg.appendChild(makeEl('line', {
+            x1: x, y1: PAD_T, x2: x, y2: PAD_T + innerH,
+            stroke: color, 'stroke-width': 1, 'stroke-dasharray': '2 4',
+        }))
+        const t = makeEl('text', {
+            x: x + 2, y: PAD_T + 10,
+            'text-anchor': 'start',
+            class: 'hyplan-solar-axis',
+            fill: color,
+        })
+        t.textContent = label
+        svg.appendChild(t)
+    }
+    drawMarker(data.sunrise_utc, '#f59e0b', '↑')
+    drawMarker(data.sunset_utc, '#f59e0b', '↓')
+
+    // Takeoff-time marker (if user has set one). The datetime-local input
+    // is treated as UTC throughout the plugin, so use it directly.
+    if (takeoffTimeLocalStr && takeoffTimeLocalStr.length >= 16) {
+        // takeoffTimeLocalStr is "YYYY-MM-DDTHH:MM"
+        const parts = takeoffTimeLocalStr.slice(11)  // "HH:MM"
+        const h = _hmsToHours(parts)
+        if (h != null) {
+            const x = xToPx(h)
+            svg.appendChild(makeEl('line', {
+                x1: x, y1: PAD_T, x2: x, y2: PAD_T + innerH,
+                stroke: '#ef4444', 'stroke-width': 1.5, 'stroke-dasharray': '4 3',
+            }))
+            const t = makeEl('text', {
+                x: x + 2, y: PAD_T + innerH - 4,
+                'text-anchor': 'start',
+                class: 'hyplan-solar-axis',
+                fill: '#ef4444',
+            })
+            t.textContent = `T₀ ${parts}`
+            svg.appendChild(t)
+        }
+    }
+
+    $box.append(svg)
+
+    // Meta line below plot
+    const sunriseStr = data.sunrise_utc || '—'
+    const sunsetStr = data.sunset_utc || '—'
+    const minZen = Math.min.apply(null, data.zenith_deg).toFixed(1)
+    $('#hyplan-solar-meta').html(
+        `(${data.lat.toFixed(4)}, ${data.lon.toFixed(4)}) · ${data.date} UTC<br>` +
+        `Sunrise ${sunriseStr} · Sunset ${sunsetStr} · min zenith ${minZen}°`
+    )
 }
 
 export default HyPlanTool

@@ -74,3 +74,85 @@
     background: var(--color-mmgis);
     color: white;
 }
+#hyplanTool .hyplan-patterns-list {
+    margin-top: 4px;
+}
+#hyplanTool .hyplan-pattern-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px;
+    border-radius: 2px;
+    font-size: 11px;
+}
+#hyplanTool .hyplan-pattern-item:hover {
+    background: var(--color-h);
+}
+#hyplanTool .hyplan-pattern-name {
+    flex: 1;
+}
+#hyplanTool .hyplan-pattern-include {
+    width: auto;
+    margin: 0;
+}
+#hyplanTool .hyplan-pattern-delete {
+    padding: 2px 8px !important;
+    margin: 0 !important;
+    font-size: 11px !important;
+    background: var(--color-r, #c0392b) !important;
+}
+#hyplanTool .hyplan-empty {
+    padding: 4px 6px;
+    font-size: 11px;
+    color: var(--color-c);
+    font-style: italic;
+}
+#hyplanTool #hyplan-glint-summary {
+    margin-top: 6px;
+}
+#hyplanTool .hyplan-glint-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px;
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    border-radius: 2px;
+}
+#hyplanTool .hyplan-glint-row:nth-child(odd):not(.hyplan-glint-header) {
+    background: var(--color-h);
+}
+#hyplanTool .hyplan-glint-header {
+    font-weight: bold;
+    color: var(--color-c);
+    border-bottom: 1px solid var(--color-h);
+    margin-bottom: 2px;
+}
+#hyplanTool .hyplan-glint-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#hyplanTool .hyplan-glint-num {
+    width: 46px;
+    text-align: right;
+}
+#hyplanTool #hyplan-solar-plot,
+#hyplanTool #hyplan-optimize-azimuth-plot {
+    margin-top: 8px;
+    text-align: center;
+}
+#hyplanTool .hyplan-solar-svg {
+    display: inline-block;
+    background: var(--color-k);
+}
+#hyplanTool .hyplan-solar-axis {
+    fill: #cbd5e1;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 9px;
+}
+#hyplanTool .hyplan-solar-axis-label {
+    font-size: 10px;
+    fill: var(--color-c);
+}
