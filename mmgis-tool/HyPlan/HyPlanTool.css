@@ -56,6 +56,12 @@
     font-size: 11px;
     color: var(--color-c);
 }
+#hyplanTool .hyplan-meta {
+    margin-top: 4px;
+    font-size: 10px;
+    color: var(--color-c);
+    line-height: 1.35;
+}
 #hyplanTool .hyplan-line-list {
     max-height: 200px;
     overflow-y: auto;

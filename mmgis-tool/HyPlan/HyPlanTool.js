@@ -19,6 +19,7 @@ let patternsCache = []              // [{pattern_id, kind, name, is_line_based, 
 let patternRefsForCompute = []      // pattern_ids of waypoint patterns to include in compute
 let swathLayer = null
 let glintLayer = null
+let glintArcLayer = null   // swath polygon + colored dots for the most-recently-generated glint_arc
 let drawLineMode = false
 let drawLineStart = null
 let patternCenterMode = false
@@ -84,9 +85,10 @@ const markup = `
         <input type="text" id="hyplan-takeoff-airport" value="" placeholder="e.g. KPMD" />
         <label>Return Airport (ICAO, blank = same as takeoff)</label>
         <input type="text" id="hyplan-return-airport" value="" placeholder="" />
-        <label>Takeoff Time (UTC — not local!)</label>
+        <label>Takeoff Time (local browser time)</label>
         <input type="datetime-local" id="hyplan-takeoff-time" value="" />
-        <div style="font-size:10px; color:var(--color-c); margin-top:-2px">The browser shows your local clock, but the entered value is sent as UTC. For noon local, enter noon + (your UTC offset).</div>
+        <div class="hyplan-meta">Enter local time here. HyPlan converts it to UTC before calling the service.</div>
+        <div id="hyplan-takeoff-time-meta" class="hyplan-meta"></div>
         <label>Wind</label>
         <select id="hyplan-wind-kind">
             <option value="still_air" selected>Still Air</option>
@@ -271,6 +273,8 @@ function interfaceWithMMGIS() {
             $('#hyplan-wind-params').hide()
         }
     })
+    $('#hyplan-takeoff-time').on('input change', updateTakeoffTimeMeta)
+    updateTakeoffTimeMeta()
 
     // Show Wind on Map
     $('#hyplan-show-wind-btn').on('click', function () {
@@ -282,8 +286,7 @@ function interfaceWithMMGIS() {
 
         const bounds = Map_.map.getBounds()
         const altitude = parseFloat($('#hyplan-altitude').val()) || 3000
-        const takeoffTime = $('#hyplan-takeoff-time').val()
-        const time = takeoffTime ? takeoffTime + ':00Z' : new Date().toISOString()
+        const time = getTakeoffTimeUtcIso() || new Date().toISOString()
 
         $('#hyplan-wind-status').text('Fetching wind data...')
         $('#hyplan-show-wind-btn').prop('disabled', true)
@@ -426,10 +429,14 @@ function interfaceWithMMGIS() {
         }
         const takeoffTimeVal = $('#hyplan-takeoff-time').val()
         if (!takeoffTimeVal) {
-            $('#hyplan-optimize-azimuth-status').text('Error: Set a takeoff time (UTC) first — Section 1.')
+            $('#hyplan-optimize-azimuth-status').text('Error: Set a takeoff time first — Section 1.')
             return
         }
-        const takeoffTime = takeoffTimeVal + ':00Z'
+        const takeoffTime = getTakeoffTimeUtcIso()
+        if (!takeoffTime) {
+            $('#hyplan-optimize-azimuth-status').text('Error: Takeoff time is invalid.')
+            return
+        }
         const centroid = polygonCentroid(polygon)
         if (!centroid) {
             $('#hyplan-optimize-azimuth-status').text('Error: Could not compute polygon centroid.')
@@ -647,8 +654,7 @@ function interfaceWithMMGIS() {
         const returnAirport = $('#hyplan-return-airport').val().trim().toUpperCase() || takeoffAirport
 
         // Takeoff time
-        const takeoffTimeVal = $('#hyplan-takeoff-time').val()
-        const takeoffTime = takeoffTimeVal ? takeoffTimeVal + ':00Z' : null
+        const takeoffTime = getTakeoffTimeUtcIso()
 
         $('#hyplan-compute-status').text('Computing...')
         $('#hyplan-compute-btn').prop('disabled', true)
@@ -789,7 +795,11 @@ function interfaceWithMMGIS() {
             $('#hyplan-glint-status').text('Set a takeoff time in Section 1 first.')
             return
         }
-        const takeoffTime = takeoffTimeVal + ':00Z'
+        const takeoffTime = getTakeoffTimeUtcIso()
+        if (!takeoffTime) {
+            $('#hyplan-glint-status').text('Takeoff time is invalid.')
+            return
+        }
         const threshold = parseFloat($('#hyplan-glint-threshold').val()) || 25.0
 
         $('#hyplan-glint-status').text('Computing glint…')
@@ -1266,8 +1276,7 @@ function interfaceWithMMGIS() {
         }
 
         // takeoff_time + aircraft only required by glint_arc; harmless to send always
-        const takeoffTimeVal = $('#hyplan-takeoff-time').val()
-        const takeoffTime = takeoffTimeVal ? takeoffTimeVal + ':00Z' : null
+        const takeoffTime = getTakeoffTimeUtcIso()
         const aircraftSel = $('#hyplan-aircraft').val() || null
 
         const bounds = Map_.map.getBounds()
@@ -1294,6 +1303,7 @@ function interfaceWithMMGIS() {
                 params: params,
                 takeoff_time: takeoffTime,
                 aircraft: aircraftSel,
+                sensor: $('#hyplan-sensor').val() || null,
             }),
         })
         .then(r => r.json())
@@ -1332,10 +1342,16 @@ function interfaceWithMMGIS() {
             })
             renderPatternsList()
 
+            // Glint arc preview: swath polygon + colored sample dots
+            renderGlintArcPreview(data)
+
             const label = data.is_line_based ? 'flight lines' : 'waypoints'
-            $('#hyplan-pattern-status').text(
-                `Generated ${data.pattern_name} (${data.pattern_kind}). Added to campaign as ${label}.`
-            )
+            let status = `Generated ${data.pattern_name} (${data.pattern_kind}). Added to campaign as ${label}.`
+            if (data.arc_glint_summary) {
+                const s = data.arc_glint_summary
+                status += ` Mean glint ${s.mean_glint.toFixed(1)}°, min ${s.min_glint.toFixed(1)}°, ${(s.fraction_below_threshold * 100).toFixed(0)}% < ${s.threshold_deg}°.`
+            }
+            $('#hyplan-pattern-status').text(status)
         })
         .catch(err => {
             $('#hyplan-pattern-status').text('Error: ' + err.message)
@@ -1415,6 +1431,7 @@ function interfaceWithMMGIS() {
         hyplanDisownAndRemove(patternsLayer); patternsLayer = null
         hyplanDisownAndRemove(swathLayer); swathLayer = null
         hyplanDisownAndRemove(glintLayer); glintLayer = null
+        hyplanDisownAndRemove(glintArcLayer); glintArcLayer = null
         hyplanDisownAndRemove(solarMarkerLayer); solarMarkerLayer = null
         campaignId = null
         selectedLineIds = []
@@ -1422,6 +1439,44 @@ function interfaceWithMMGIS() {
 }
 
 // --- Helper functions ---
+
+function getTakeoffTimeUtcIso() {
+    const raw = ($('#hyplan-takeoff-time').val() || '').trim()
+    if (!raw) return null
+    const date = new Date(raw)
+    if (Number.isNaN(date.getTime())) return null
+    return date.toISOString().replace('.000Z', 'Z')
+}
+
+function formatUtcOffset(date) {
+    const offsetMin = -date.getTimezoneOffset()
+    const sign = offsetMin >= 0 ? '+' : '-'
+    const absMin = Math.abs(offsetMin)
+    const hours = String(Math.floor(absMin / 60)).padStart(2, '0')
+    const minutes = String(absMin % 60).padStart(2, '0')
+    return `${sign}${hours}:${minutes}`
+}
+
+function updateTakeoffTimeMeta() {
+    const $meta = $('#hyplan-takeoff-time-meta')
+    if ($meta.length === 0) return
+
+    const raw = ($('#hyplan-takeoff-time').val() || '').trim()
+    if (!raw) {
+        $meta.text('')
+        return
+    }
+
+    const date = new Date(raw)
+    if (Number.isNaN(date.getTime())) {
+        $meta.text('Invalid local date/time.')
+        return
+    }
+
+    const utcIso = date.toISOString().replace('.000Z', 'Z')
+    const utcDisplay = utcIso.slice(0, 16).replace('T', ' ')
+    $meta.text(`Sent as ${utcDisplay} UTC (local UTC${formatUtcOffset(date)}).`)
+}
 
 function getDrawnPolygon() {
     // Try to get the most recently drawn polygon from the Draw tool's layers
@@ -1765,11 +1820,60 @@ function deletePattern(patternId) {
             patternsCache = patternsCache.filter(p => p.pattern_id !== patternId)
             patternRefsForCompute = patternRefsForCompute.filter(id => id !== patternId)
             renderPatternsList()
+            // The arc-glint preview is per-pattern; clear if the deleted one
+            // owns the layer (we only track the most recent).
+            hyplanDisownAndRemove(glintArcLayer)
+            glintArcLayer = null
             $('#hyplan-pattern-status').text(`Deleted pattern ${patternId}.`)
         })
         .catch(err => {
             $('#hyplan-pattern-status').text('Delete error: ' + err.message)
         })
+}
+
+function renderGlintArcPreview(data) {
+    // Replace the previous arc-glint layer (only one shown at a time).
+    hyplanDisownAndRemove(glintArcLayer)
+    glintArcLayer = null
+    if (!data || (!data.arc_glint && !data.arc_swath)) return
+
+    const layers = []
+
+    if (data.arc_swath) {
+        const swath = window.L.geoJSON(data.arc_swath, {
+            style: {
+                color: '#f59e0b',
+                weight: 1.5,
+                fillColor: '#f59e0b',
+                fillOpacity: 0.10,
+            },
+            onEachFeature: function (feature, layer) {
+                const p = feature.properties || {}
+                if (p.name) layer.bindTooltip(`${p.name} swath`, { sticky: true })
+            },
+        })
+        layers.push(swath)
+    }
+
+    if (data.arc_glint && data.arc_glint.features && data.arc_glint.features.length > 0) {
+        const dots = window.L.geoJSON(data.arc_glint, {
+            pointToLayer: function (feature, latlng) {
+                const ga = feature.properties.glint_angle
+                return window.L.circleMarker(latlng, {
+                    radius: 3,
+                    stroke: false,
+                    fillColor: glintColor(ga),
+                    fillOpacity: 0.85,
+                    interactive: false,
+                })
+            },
+        })
+        layers.push(dots)
+    }
+
+    if (layers.length === 0) return
+    glintArcLayer = hyplanOwn(window.L.layerGroup(layers))
+    glintArcLayer.addTo(Map_.map)
 }
 
 // --- Solar Position helpers ---
@@ -1814,9 +1918,10 @@ function midpointOfFlightLine(lineId) {
 function requestAndRenderSolar(lat, lon) {
     // Date: from takeoff_time if set, else today (UTC)
     const takeoffTimeVal = $('#hyplan-takeoff-time').val()
+    const takeoffTimeUtc = getTakeoffTimeUtcIso()
     let date
-    if (takeoffTimeVal && takeoffTimeVal.length >= 10) {
-        date = takeoffTimeVal.slice(0, 10)
+    if (takeoffTimeUtc && takeoffTimeUtc.length >= 10) {
+        date = takeoffTimeUtc.slice(0, 10)
     } else {
         date = new Date().toISOString().slice(0, 10)
     }
@@ -1835,7 +1940,7 @@ function requestAndRenderSolar(lat, lon) {
             $('#hyplan-solar-status').text('Error: ' + getErrorMessage(data))
             return
         }
-        renderSolarPlot(data, takeoffTimeVal)
+        renderSolarPlot(data, takeoffTimeUtc)
         $('#hyplan-solar-status').text(`Plotted ${data.zenith_deg.length} samples for ${data.date}.`)
     })
     .catch(err => {
@@ -2046,7 +2151,7 @@ function _hmsToHours(hms) {
     return h + m / 60 + s / 3600
 }
 
-function renderSolarPlot(data, takeoffTimeLocalStr) {
+function renderSolarPlot(data, takeoffTimeUtcStr) {
     const $box = $('#hyplan-solar-plot')
     $box.empty()
 
@@ -2165,11 +2270,9 @@ function renderSolarPlot(data, takeoffTimeLocalStr) {
     drawMarker(data.sunrise_utc, '#f59e0b', '↑')
     drawMarker(data.sunset_utc, '#f59e0b', '↓')
 
-    // Takeoff-time marker (if user has set one). The datetime-local input
-    // is treated as UTC throughout the plugin, so use it directly.
-    if (takeoffTimeLocalStr && takeoffTimeLocalStr.length >= 16) {
-        // takeoffTimeLocalStr is "YYYY-MM-DDTHH:MM"
-        const parts = takeoffTimeLocalStr.slice(11)  // "HH:MM"
+    // Takeoff-time marker (if user has set one), plotted in UTC to match the axis.
+    if (takeoffTimeUtcStr && takeoffTimeUtcStr.length >= 16) {
+        const parts = takeoffTimeUtcStr.slice(11, 16)  // "HH:MM"
         const h = _hmsToHours(parts)
         if (h != null) {
             const x = xToPx(h)

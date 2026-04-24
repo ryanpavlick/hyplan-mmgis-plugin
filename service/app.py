@@ -819,6 +819,7 @@ class PatternRequest(BaseModel):
     # Required for "glint_arc"; ignored otherwise:
     takeoff_time: Optional[str] = None  # ISO 8601 UTC
     aircraft: Optional[str] = None      # name from /aircraft
+    sensor: Optional[str] = None        # name from /sensors; for arc swath/glint preview
 
 
 class SwathRequest(BaseModel):
@@ -1000,8 +1001,7 @@ def compute_glint(req: GlintRequest):
             0,
             "Sun is below the horizon (solar_zenith > 90°) at the observation time. "
             "Glint angles are not physically meaningful for nighttime. "
-            "Check that takeoff_time is in UTC — the datetime-local input has no timezone, "
-            "so a local wall-clock time may produce nighttime UTC at the mission site."
+            "Check that takeoff_time matches the intended UTC observation time."
         )
 
     return {
@@ -1533,7 +1533,108 @@ def generate_pattern(req: PatternRequest):
 
     campaign.add_pattern(pattern)
     _persist_campaign(campaign)
-    return _pattern_response_payload(campaign, pattern)
+    payload = _pattern_response_payload(campaign, pattern)
+
+    # For glint_arc, also compute the swath footprint and per-sample glint
+    # so the UI can render the colored arc swath in one round-trip.
+    if pattern.kind == "glint_arc" and req.sensor:
+        try:
+            payload.update(_compute_arc_glint_preview(pattern, req.sensor))
+        except Exception:
+            logger.warning("glint_arc preview failed: %s", traceback.format_exc())
+            # Non-fatal — the arc itself is already in the response.
+
+    return payload
+
+
+def _compute_arc_glint_preview(pattern, sensor_name: str, max_points: int = 4000) -> dict:
+    """Build {arc_swath, arc_glint, arc_glint_summary} for a glint_arc Pattern.
+
+    Reconstructs the underlying GlintArc from pattern.params, computes the
+    swath footprint polygon and per-sample glint angles, and returns
+    GeoJSON-ready dicts for direct rendering by the plugin frontend.
+    """
+    from hyplan.glint import GlintArc, compute_glint_arc, fraction_exceeding_glint_threshold
+    from shapely.geometry import mapping as shapely_mapping
+
+    sensor = create_sensor(sensor_name)
+    p = pattern.params
+    obs_dt = datetime.datetime.fromisoformat(
+        p["observation_datetime"].replace("Z", "+00:00")
+    )
+    cl_m = p.get("collection_length_m")
+    arc = GlintArc(
+        target_lat=float(p["center_lat"]),
+        target_lon=float(p["center_lon"]),
+        observation_datetime=obs_dt,
+        altitude_msl=float(p["altitude_msl_m"]) * ureg.meter,
+        speed=float(p["speed_mps"]) * (ureg.meter / ureg.second),
+        bank_angle=p.get("bank_angle"),
+        bank_direction=str(p.get("bank_direction", "right")),
+        collection_length=(float(cl_m) * ureg.meter if cl_m is not None else None),
+    )
+
+    # Footprint polygon
+    footprint = arc.footprint(sensor)
+    arc_swath = {
+        "type": "Feature",
+        "geometry": shapely_mapping(footprint),
+        "properties": {
+            "pattern_id": pattern.pattern_id,
+            "pattern_kind": pattern.kind,
+            "name": pattern.name,
+        },
+    }
+
+    # Per-sample glint
+    gdf = compute_glint_arc(arc, sensor)
+    n = len(gdf)
+    if n > max_points and n > 0:
+        stride = (n + max_points - 1) // max_points
+        gdf_render = gdf.iloc[::stride]
+    else:
+        gdf_render = gdf
+
+    features = []
+    for row in gdf_render.itertuples(index=False):
+        features.append({
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [float(row.target_longitude), float(row.target_latitude)],
+            },
+            "properties": {
+                "pattern_id": pattern.pattern_id,
+                "glint_angle": float(row.glint_angle),
+                "tilt_angle": float(row.tilt_angle),
+                "along_track_distance": float(row.along_track_distance),
+            },
+        })
+    arc_glint = {"type": "FeatureCollection", "features": features}
+
+    threshold = 25.0
+    try:
+        frac = float(fraction_exceeding_glint_threshold(gdf, threshold))
+    except Exception:
+        frac = None
+
+    summary = {
+        "pattern_id": pattern.pattern_id,
+        "pattern_name": pattern.name,
+        "n_samples": int(n),
+        "mean_glint": float(gdf["glint_angle"].mean()) if n else None,
+        "min_glint": float(gdf["glint_angle"].min()) if n else None,
+        "max_glint": float(gdf["glint_angle"].max()) if n else None,
+        "fraction_below_threshold": frac,
+        "threshold_deg": threshold,
+        "sensor": sensor_name,
+    }
+
+    return {
+        "arc_swath": arc_swath,
+        "arc_glint": arc_glint,
+        "arc_glint_summary": summary,
+    }
 
 
 class DeletePatternRequest(BaseModel):
