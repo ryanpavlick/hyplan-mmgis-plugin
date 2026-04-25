@@ -1,5 +1,7 @@
 # hyplan-mmgis-plugin
 
+This plugin is still in very early development and not ready for production use.
+
 MMGIS plugin for flight line planning with [HyPlan](https://github.com/ryanpavlick/hyplan).
 
 ## Components
