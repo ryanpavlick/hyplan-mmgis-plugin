@@ -81,6 +81,7 @@ yarn-error.log*
 # project-local campaigns dir during dev should stay out of git.
 /campaigns/
 /tmp-campaigns/
+dev/.campaigns/
 
 # Claude Code workspace
 .claude/
