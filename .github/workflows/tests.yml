@@ -32,19 +32,21 @@ jobs:
         run: |
           pip install --upgrade pip
           # Match the runtime install path: install hyplan (with winds extras
-          # so the wind endpoints' imports resolve), then service deps.
+          # so the wind endpoints' imports resolve), then service deps,
+          # then test deps.
           pip install -e "./hyplan[winds]"
           pip install -r service/requirements.txt
+          pip install -r tests/requirements.txt
           pip install ruff
 
       - name: Lint (ruff)
         run: ruff check service
 
-      - name: Import smoke
-        # Verifies every hyplan API the service depends on still resolves
-        # against current main, and the FastAPI app object constructs.
-        run: |
-          python -c "import service.app as s; assert s.app is not None; print('service imported ok')"
+      - name: Pytest
+        # Per-router test suite under tests/routers/.  Uses FastAPI's
+        # TestClient (no uvicorn process), so it's fast and covers the
+        # 26 service endpoints + the error classifier.
+        run: pytest tests -v --tb=short
 
       - name: Service start smoke
         # Start uvicorn, hit /health and /aircraft and /sensors, stop.

@@ -34,6 +34,7 @@ working cache over the saved campaign directories.
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -54,7 +55,19 @@ from .state import load_persisted_campaigns
 
 logger = logging.getLogger("hyplan-service")
 
-app = FastAPI(title="HyPlan Service", version="0.2.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: rehydrate campaigns from HYPLAN_CAMPAIGNS_DIR.  FastAPI's
+    # legacy @app.on_event("startup") was deprecated in 0.110+; the
+    # lifespan context manager is the supported equivalent.
+    load_persisted_campaigns()
+    yield
+    # Nothing to tear down — campaign state is plain in-memory dicts
+    # whose lifetime matches the process.
+
+
+app = FastAPI(title="HyPlan Service", version="0.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -62,11 +75,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def _startup() -> None:
-    load_persisted_campaigns()
 
 
 # Routers are mounted in the same functional grouping the legacy single

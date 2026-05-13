@@ -130,14 +130,44 @@ error paths.
 
 CI (`.github/workflows/tests.yml`) runs three jobs:
 
-| Job             | Python         | What it does                                                                              |
-| --------------- | -------------- | ----------------------------------------------------------------------------------------- |
-| `service (3.x)` | 3.10/3.11/3.12 | `ruff check service` -> import smoke -> uvicorn start + curl /health, /aircraft, /sensors |
-| `frontend`      | -              | `npm ci` -> `npm run lint` -> `npm run validate:config`                                   |
-| `docker`        | -              | `docker build ./service` -> mount HyPlan -> hit /health                                   |
+| Job             | Python         | What it does                                                                                 |
+| --------------- | -------------- | -------------------------------------------------------------------------------------------- |
+| `service (3.x)` | 3.10/3.11/3.12 | `ruff check service` -> `pytest tests` -> uvicorn start + curl /health, /aircraft, /sensors  |
+| `frontend`      | -              | `npm ci` -> `npm run lint` -> `npm run validate:config`                                      |
+| `docker`        | -              | `docker build ./service` -> mount HyPlan -> hit /health                                      |
 
 All three install HyPlan from `ryanpavlick/hyplan@main` (not a release
 tag).
+
+## Pytest
+
+Tests live under `tests/routers/` mirroring `service/routers/` —
+one file per router plus `test_errors.py` for the classifier.  The
+suite uses FastAPI's `TestClient` (httpx-based, no uvicorn process),
+so it's fast (~3-4 s locally for ~50 tests).
+
+`tests/conftest.py` autouses two fixtures:
+
+- A session-level autouse that points `HYPLAN_CAMPAIGNS_DIR` at a tmp
+  directory **before** `service.app` is imported (the module reads
+  the env var at import time).
+- A function-scoped autouse that clears `service.state._campaigns` /
+  `_plans` and patches `state.CAMPAIGNS_DIR` to a per-test tmp_path
+  so every test starts from a clean slate.
+
+Local run:
+
+```bash
+pip install -r tests/requirements.txt
+pytest tests -v
+```
+
+For a single router: `pytest tests/routers/test_generate.py -v`.
+
+The suite **does** make live HyPlan calls (compute_flight_plan,
+GlintArc, sun position), so it's a real integration test of the
+service against HyPlan main rather than a pure unit test.  Mocking
+HyPlan would defeat the point.
 
 ## Pre-commit hooks
 

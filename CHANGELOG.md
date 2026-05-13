@@ -27,6 +27,12 @@ work in v0.3+ safely._
 
 ### Changed (continued)
 
+- **FastAPI `on_event("startup")` → `lifespan` context manager.**
+  The legacy startup handler was deprecated in FastAPI 0.110+; moved
+  the campaign-rehydration call into an async lifespan context.  No
+  behavioural change; clears two DeprecationWarnings on every test
+  run.
+
 - **`service/app.py` split into a package.**  The 1951-line monolith
   is now a 10-module layout under `service/`: `state.py` (campaign and
   plan caches + persistence helpers), `errors.py` (HyPlan-aware
@@ -42,6 +48,20 @@ work in v0.3+ safely._
 - **`.pre-commit-config.yaml`** mirroring CI's lint surface: ruff on
   `service/`, ESLint on `mmgis-tool/HyPlan/`, plus trailing-whitespace,
   EOF-fixer, YAML / JSON / merge-conflict checks.
+
+- **Pytest harness for the service** (`tests/routers/`).  ~50 tests
+  organized one file per router plus `test_errors.py` for the
+  classifier.  Uses FastAPI's `TestClient` (no uvicorn process), runs
+  in ~4 s, makes real HyPlan calls (compute_flight_plan, GlintArc,
+  sunpos).  Wired into the `service` job in
+  `.github/workflows/tests.yml`.
+
+- **`AGENTS.md` + `.knowledge/`** for AI-agent onboarding, lifted
+  from the MMGIS development branch pattern.  Top-level
+  agent-facing entry (critical rules, quick start, architecture,
+  knowledge index) plus longer-form context in
+  `.knowledge/conventions-and-gotchas.md` and
+  `.knowledge/knowledge-notes.md`.
 
 - **Structured service errors** with stable codes.  Service responses
   for failures now carry
