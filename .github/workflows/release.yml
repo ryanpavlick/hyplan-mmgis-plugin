@@ -59,8 +59,15 @@ jobs:
           VERSION=${{ github.event.inputs.version }}
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add CITATION.cff
-          git commit -m "Release v${VERSION}"
+          # CITATION.cff may already be at the target version (e.g. when a
+          # contributor pre-bumped it).  In that case skip the commit and
+          # tag the current HEAD as-is.
+          if git diff --quiet -- CITATION.cff; then
+            echo "CITATION.cff already at v${VERSION}; tagging current HEAD."
+          else
+            git add CITATION.cff
+            git commit -m "Release v${VERSION}"
+          fi
           # The `v` prefix is load-bearing — post-release.yml only
           # triggers on `v[0-9]+.[0-9]+.[0-9]+` tags.
           git tag "v${VERSION}"
