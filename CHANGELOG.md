@@ -25,6 +25,18 @@ work in v0.3+ safely._
   supported-versions table, commits, tags, and creates the GitHub
   Release in one job.  `post-release.yml` deleted.
 
+### Changed (continued)
+
+- **`service/app.py` split into a package.**  The 1951-line monolith
+  is now a 10-module layout under `service/`: `state.py` (campaign and
+  plan caches + persistence helpers), `errors.py` (HyPlan-aware
+  exception → HTTP classifier), `schemas.py` (Pydantic models), and
+  `service/routers/{metadata,tiles,wind,generate,compute,export,analysis,lines,patterns,campaigns}.py`
+  — one `APIRouter` per functional area.  `service/app.py` is now an
+  83-line entry that wires the routers; `uvicorn service.app:app`
+  still works.  Largest file in the new layout is
+  `routers/analysis.py` at 381 lines.
+
 ### Added
 
 - **`.pre-commit-config.yaml`** mirroring CI's lint surface: ruff on
