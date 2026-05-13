@@ -1,15 +1,19 @@
 import $ from 'jquery'
-import F_ from '../../Basics/Formulae_/Formulae_'
 import L_ from '../../Basics/Layers_/Layers_'
 import Map_ from '../../Basics/Map_/Map_'
 import './HyPlanTool.css'
 
+// Browser-side controller for the HyPlan MMGIS plugin. This file owns the
+// panel UI, map interaction modes, Leaflet overlay lifecycle, and translation
+// between MMGIS state and the FastAPI service.
+
 // Default service URL (can be overridden in config)
 let SERVICE_URL = 'http://localhost:8100'
 
-// State
+// Tool state shared across handlers. This includes the active campaign
+// identity, current line/pattern selections, and references to plugin-owned
+// Leaflet layers so we can replace them cleanly.
 let campaignId = null
-let drawnPolygon = null
 let flightLineLayer = null
 let planLayer = null
 let selectedLineIds = []
@@ -22,9 +26,7 @@ let glintLayer = null
 let glintArcLayer = null   // swath polygon + colored dots for the most-recently-generated glint_arc
 let drawLineMode = false
 let drawLineStart = null
-let patternCenterMode = false
 let patternCenter = null
-let solarPickMode = false
 let solarMarkerLayer = null
 
 // --- Self-heal against MMGIS layer-state resets ---------------------------
@@ -65,6 +67,8 @@ function installHyplanSelfHeal() {
     _hyplanSelfHealInstalled = true
 }
 
+// The numbered sections in this panel mirror the intended planning workflow,
+// from campaign setup through generation, analysis, and export.
 const markup = `
 <div id="hyplanTool">
     <h3>HyPlan Flight Planner</h3>
@@ -254,6 +258,8 @@ const HyPlanTool = {
 }
 
 function interfaceWithMMGIS() {
+    // Bootstrap the tool inside the MMGIS panel: mount markup, read config,
+    // query service metadata, and bind the UI + map event handlers.
     this.separateFromMMGIS = function () {
         separateFromMMGIS()
     }
@@ -939,7 +945,6 @@ function interfaceWithMMGIS() {
         }
         // Second click — create line
         const altitude = parseFloat($('#hyplan-altitude').val()) || 3000
-        const name = $('#hyplan-campaign-name').val() || 'Mission'
 
         fetch(`${SERVICE_URL}/add-line`, {
             method: 'POST',
@@ -1141,7 +1146,6 @@ function interfaceWithMMGIS() {
     })
 
     $('#hyplan-set-pattern-center-btn').on('click', function () {
-        patternCenterMode = true
         patternCenter = null
         $('#hyplan-set-pattern-center-btn').hide()
         $('#hyplan-cancel-pattern-btn').show()
@@ -1150,7 +1154,6 @@ function interfaceWithMMGIS() {
     })
 
     $('#hyplan-cancel-pattern-btn').on('click', function () {
-        patternCenterMode = false
         patternCenter = null
         Map_.map.off('click', onPatternCenterClick)
         $('#hyplan-cancel-pattern-btn').hide()
@@ -1176,7 +1179,6 @@ function interfaceWithMMGIS() {
 
     function onPatternCenterClick(e) {
         patternCenter = e.latlng
-        patternCenterMode = false
         Map_.map.off('click', onPatternCenterClick)
         $('#hyplan-cancel-pattern-btn').hide()
         $('#hyplan-set-pattern-center-btn').show()
@@ -1186,7 +1188,6 @@ function interfaceWithMMGIS() {
 
     // --- Section 5: Solar Position --------------------------------------
     $('#hyplan-pick-solar-point-btn').on('click', function () {
-        solarPickMode = true
         $('#hyplan-pick-solar-point-btn').hide()
         $('#hyplan-cancel-pick-solar-btn').show()
         $('#hyplan-solar-status').text('Click the map to plot solar zenith here.')
@@ -1194,7 +1195,6 @@ function interfaceWithMMGIS() {
     })
 
     $('#hyplan-cancel-pick-solar-btn').on('click', function () {
-        solarPickMode = false
         Map_.map.off('click', onSolarPickClick)
         $('#hyplan-cancel-pick-solar-btn').hide()
         $('#hyplan-pick-solar-point-btn').show()
@@ -1202,7 +1202,6 @@ function interfaceWithMMGIS() {
     })
 
     function onSolarPickClick(e) {
-        solarPickMode = false
         Map_.map.off('click', onSolarPickClick)
         $('#hyplan-cancel-pick-solar-btn').hide()
         $('#hyplan-pick-solar-point-btn').show()
@@ -1438,7 +1437,7 @@ function interfaceWithMMGIS() {
     }
 }
 
-// --- Helper functions ---
+// --- Shared UI / rendering helpers -----------------------------------------
 
 function getTakeoffTimeUtcIso() {
     const raw = ($('#hyplan-takeoff-time').val() || '').trim()
@@ -1502,12 +1501,10 @@ function displayFlightLines(geojson) {
     hyplanDisownAndRemove(flightLineLayer)
     flightLineLayer = hyplanOwn(window.L.geoJSON(geojson, {
         interactive: true,
-        style: function (feature) {
-            return {
-                color: '#3b82f6',
-                weight: 4,
-                opacity: 0.8,
-            }
+        style: {
+            color: '#3b82f6',
+            weight: 4,
+            opacity: 0.8,
         },
         onEachFeature: function (feature, layer) {
             const name = feature.properties.site_name || feature.properties.line_id
@@ -1668,6 +1665,9 @@ function getErrorMessage(data) {
     return 'Unknown error'
 }
 
+// Analysis rendering helpers: glint overlays and pattern decoration that sit
+// alongside the core line/plan layers.
+
 // Approximation of Matplotlib RdYlBu colormap with PowerNorm(gamma=0.4, vmin=0, vmax=90)
 // to match notebooks/glint_analysis.ipynb Cell 10 styling. Red = low glint angle (bad,
 // near-specular), blue = high (good).
@@ -1782,25 +1782,6 @@ function renderPatternsList() {
     })
 }
 
-function refreshPatternsCache() {
-    if (!campaignId) return Promise.resolve()
-    return fetch(`${SERVICE_URL}/patterns/${campaignId}`)
-        .then(r => r.json())
-        .then(data => {
-            patternsCache = (data.patterns || []).map(p => ({
-                pattern_id: p.pattern_id,
-                kind: p.kind,
-                name: p.name,
-                is_line_based: p.is_line_based,
-            }))
-            // Drop refs to patterns that no longer exist
-            const ids = new Set(patternsCache.map(p => p.pattern_id))
-            patternRefsForCompute = patternRefsForCompute.filter(id => ids.has(id))
-            renderPatternsList()
-        })
-        .catch(() => { /* non-fatal */ })
-}
-
 function deletePattern(patternId) {
     if (!campaignId) return
     fetch(`${SERVICE_URL}/delete-pattern`, {
@@ -1876,7 +1857,7 @@ function renderGlintArcPreview(data) {
     glintArcLayer.addTo(Map_.map)
 }
 
-// --- Solar Position helpers ---
+// --- Solar position helpers -------------------------------------------------
 
 function showSolarMarker(lat, lon) {
     hyplanDisownAndRemove(solarMarkerLayer)
@@ -1917,7 +1898,6 @@ function midpointOfFlightLine(lineId) {
 
 function requestAndRenderSolar(lat, lon) {
     // Date: from takeoff_time if set, else today (UTC)
-    const takeoffTimeVal = $('#hyplan-takeoff-time').val()
     const takeoffTimeUtc = getTakeoffTimeUtcIso()
     let date
     if (takeoffTimeUtc && takeoffTimeUtc.length >= 10) {

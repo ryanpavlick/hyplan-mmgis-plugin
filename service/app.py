@@ -1,16 +1,43 @@
-"""HyPlan service — FastAPI bridge between MMGIS and hyplan."""
+"""FastAPI bridge between the MMGIS HyPlan tool and the core `hyplan` library.
+
+This module is the backend half of the plugin. It translates relatively thin
+HTTP requests from the MMGIS frontend into HyPlan campaign mutations,
+generation calls, planning runs, and analysis products.
+
+Two pieces of mutable process state are important when reading this file:
+
+- `_campaigns` stores active `Campaign` objects keyed by campaign UUID and any
+  extra aliases used by the frontend.
+- `_plans` stores the most recently computed flight plan per campaign so the
+  export endpoint can write KML/GPX without recomputing.
+
+Campaigns are also persisted to `HYPLAN_CAMPAIGNS_DIR` and reloaded on service
+startup, so the in-memory state is effectively a working cache over the saved
+campaign directories.
+
+The endpoints are organized in functional groups rather than by HTTP method:
+
+- health and selector metadata (`/health`, `/aircraft`, `/sensors`)
+- campaign geometry generation and flight planning
+- map-analysis overlays like wind, swaths, glint, and solar position
+- line and pattern mutation helpers used by the interactive MMGIS editor
+- export and download endpoints for the latest computed plan
+"""
 
 from __future__ import annotations
 
 import datetime
 import logging
 import os
+import re
+import time
 import traceback
 from typing import Any, Optional
 
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 import hyplan
@@ -44,9 +71,11 @@ app.add_middleware(
 def startup():
     _load_persisted_campaigns()
 
-# In-memory campaign store (keyed by campaign_id)
+# Active campaign objects keyed by campaign UUID plus any frontend alias used
+# when the browser creates a campaign before it knows the canonical UUID.
 _campaigns: dict[str, Campaign] = {}
-# Most recent computed plan per campaign
+# Most recent computed GeoDataFrame per campaign. `/export` depends on this
+# cache rather than recomputing a plan from browser state.
 _plans: dict[str, Any] = {}
 
 CAMPAIGNS_DIR = os.environ.get("HYPLAN_CAMPAIGNS_DIR", "/tmp/hyplan-campaigns")
@@ -214,7 +243,7 @@ class ExportResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Endpoints
+# Endpoints: health / metadata / planning
 # ---------------------------------------------------------------------------
 
 @app.get("/health", response_model=HealthResponse)
@@ -587,7 +616,7 @@ def optimize_sequence(req: OptimizeRequest):
                     proposed.append({"kind": "line", "line_id": lid, "reversed": True})
                     break
             else:
-                warnings.append(f"Could not map optimized line back to campaign ID")
+                warnings.append("Could not map optimized line back to campaign ID")
 
     return OptimizeResponse(
         proposed_sequence=proposed,
@@ -683,12 +712,116 @@ def list_sensors():
     return {"sensors": sorted(SENSOR_REGISTRY.keys())}
 
 
+# --- FAA aeronautical chart tile proxy -------------------------------------
+# vfrmap.com serves the current AIRAC cycle's VFR/IFR charts as XYZ/TMS tiles.
+# The cycle string (e.g. '20260319') is embedded in the URL path and rolls
+# every 28 days, so we scrape it from vfrmap's frontend at runtime and cache
+# the result. Tile requests from MMGIS hit /faa-tile/... here, we look up the
+# current cycle, forward to vfrmap, and stream the response back.
+
+_VFRMAP_KINDS = {
+    "vfrc": "VFR Sectional",
+    "sectc": "Sectional (secondary)",
+    "helic": "Helicopter Route",
+    "ifrlc": "IFR Low Enroute",
+    "ehc": "IFR High Enroute",
+}
+_VFRMAP_CYCLE_TTL_SEC = 3600
+_VFRMAP_CYCLE_PATTERN = re.compile(r"""f\s*=\s*['"](\d{8})['"]""")
+_vfrmap_cycle_cache: dict[str, Any] = {"cycle": None, "fetched_at": 0.0}
+
+
+def _get_vfrmap_cycle() -> str:
+    now = time.time()
+    cached = _vfrmap_cycle_cache["cycle"]
+    if cached and (now - _vfrmap_cycle_cache["fetched_at"]) < _VFRMAP_CYCLE_TTL_SEC:
+        return cached
+    try:
+        r = requests.get("https://vfrmap.com/js/map.js", timeout=10)
+        r.raise_for_status()
+        m = _VFRMAP_CYCLE_PATTERN.search(r.text)
+        if m:
+            _vfrmap_cycle_cache["cycle"] = m.group(1)
+            _vfrmap_cycle_cache["fetched_at"] = now
+            return m.group(1)
+        logger.warning("vfrmap map.js did not contain AIRAC cycle pattern")
+    except Exception as e:
+        logger.warning("Failed to fetch vfrmap cycle: %s", e)
+    if cached:
+        return cached
+    raise HTTPException(status_code=503, detail="vfrmap AIRAC cycle unavailable")
+
+
+@app.get("/faa-tile/{kind}/{z}/{y}/{x}")
+def faa_tile(kind: str, z: int, y: int, x: int):
+    """Proxy FAA chart tiles from vfrmap.com with auto-refreshed AIRAC cycle.
+
+    MMGIS points its tile layer URL at this endpoint with `tileformat: "tms"`,
+    so `y` arrives already in TMS convention (y=0 at bottom), which is what
+    vfrmap expects.
+    """
+    if kind not in _VFRMAP_KINDS:
+        raise HTTPException(status_code=404, detail=f"Unknown FAA chart kind: {kind}")
+    cycle = _get_vfrmap_cycle()
+    upstream = f"https://vfrmap.com/{cycle}/tiles/{kind}/{z}/{y}/{x}.jpg"
+    try:
+        r = requests.get(upstream, timeout=15)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"vfrmap fetch failed: {e}")
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail="tile not found")
+    if not r.ok:
+        raise HTTPException(status_code=502, detail=f"vfrmap returned {r.status_code}")
+    return Response(
+        content=r.content,
+        media_type=r.headers.get("Content-Type", "image/jpeg"),
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @app.get("/imagery-layers")
 def imagery_layers():
-    """Return pre-configured MMGIS tile layer objects for cloud/satellite imagery."""
+    """Return pre-configured MMGIS tile layer objects for cloud/satellite imagery
+    and FAA aeronautical charts."""
     gibs_base = "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best"
+    # FAA charts are served via the /faa-tile proxy so the vfrmap AIRAC cycle
+    # stays fresh without the operator touching the mission config.
+    faa_proxy = "/faa-tile"
     return {
         "layers": [
+            {
+                "name": "FAA VFR Sectional",
+                "type": "tile",
+                "url": f"{faa_proxy}/vfrc/{{z}}/{{y}}/{{x}}",
+                "tileformat": "tms",
+                "visibility": False,
+                "minZoom": 5,
+                "maxZoom": 15,
+                "maxNativeZoom": 12,
+                "attribution": "FAA charts via vfrmap.com",
+            },
+            {
+                "name": "FAA IFR Low Enroute",
+                "type": "tile",
+                "url": f"{faa_proxy}/ifrlc/{{z}}/{{y}}/{{x}}",
+                "tileformat": "tms",
+                "visibility": False,
+                "minZoom": 5,
+                "maxZoom": 14,
+                "maxNativeZoom": 11,
+                "attribution": "FAA charts via vfrmap.com",
+            },
+            {
+                "name": "FAA IFR High Enroute",
+                "type": "tile",
+                "url": f"{faa_proxy}/ehc/{{z}}/{{y}}/{{x}}",
+                "tileformat": "tms",
+                "visibility": False,
+                "minZoom": 4,
+                "maxZoom": 13,
+                "maxNativeZoom": 10,
+                "attribution": "FAA charts via vfrmap.com",
+            },
             {
                 "name": "VIIRS SNPP True Color",
                 "type": "tile",
@@ -758,6 +891,10 @@ def imagery_layers():
         ]
     }
 
+
+# ---------------------------------------------------------------------------
+# Endpoints: map analysis overlays
+# ---------------------------------------------------------------------------
 
 class AddLineRequest(BaseModel):
     campaign_id: Optional[str] = None
@@ -1053,7 +1190,7 @@ def optimize_azimuth(req: OptimizeAzimuthRequest):
         raise HTTPException(status_code=400, detail=f"Invalid takeoff_time: '{req.takeoff_time}'")
 
     if req.criterion not in ("max_mean", "max_min"):
-        raise HTTPException(status_code=400, detail=f"criterion must be 'max_mean' or 'max_min'")
+        raise HTTPException(status_code=400, detail="criterion must be 'max_mean' or 'max_min'")
     if req.step_deg <= 0 or req.step_deg > 90:
         raise HTTPException(status_code=400, detail="step_deg must be in (0, 90]")
     if req.leg_length_m <= 0:
@@ -1210,6 +1347,10 @@ def solar_position(req: SolarPositionRequest):
     }
 
 
+# ---------------------------------------------------------------------------
+# Endpoints: manual line editing
+# ---------------------------------------------------------------------------
+
 @app.post("/add-line")
 def add_line(req: AddLineRequest):
     """Add a single flight line to a campaign."""
@@ -1230,7 +1371,7 @@ def add_line(req: AddLineRequest):
         altitude_msl=req.altitude_msl_m * ureg.meter,
         site_name=req.site_name or f"Line {len(campaign.flight_line_ids) + 1}",
     )
-    group_id = campaign.add_flight_lines(
+    campaign.add_flight_lines(
         [line], group_name=req.site_name or "Manual", group_type="manual",
     )
     _persist_campaign(campaign)
@@ -1398,6 +1539,10 @@ def transform_lines(req: TransformLinesRequest):
         "revision": campaign.revision,
     }
 
+
+# ---------------------------------------------------------------------------
+# Endpoints: pattern generation and mutation
+# ---------------------------------------------------------------------------
 
 def _invoke_pattern_generator(kind: str, center: tuple, heading: float,
                               altitude_msl_m: float, params: dict,
@@ -1711,6 +1856,10 @@ def list_patterns(campaign_id: str):
         ],
     }
 
+
+# ---------------------------------------------------------------------------
+# Endpoints: campaign lifecycle / rehydration
+# ---------------------------------------------------------------------------
 
 @app.post("/campaigns")
 def create_campaign(name: str, bounds: list[float]):
