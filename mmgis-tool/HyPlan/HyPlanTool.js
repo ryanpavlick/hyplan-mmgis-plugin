@@ -1660,7 +1660,17 @@ function updateSelectionStatus() {
 }
 
 function getErrorMessage(data) {
-    if (data.detail) return typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
+    // Service errors now come back as either:
+    //   { detail: "string" }                            — FastAPI validation, legacy 400s
+    //   { detail: { message, code, operation } }        — classified by _raise_http
+    // Prefer the structured `message`; fall back to stringifying `detail`
+    // for older error shapes (FastAPI's request-body validation still
+    // returns a list of dicts under `detail`).
+    if (data.detail) {
+        if (typeof data.detail === 'string') return data.detail
+        if (typeof data.detail === 'object' && data.detail.message) return data.detail.message
+        return JSON.stringify(data.detail)
+    }
     if (data.message) return data.message
     return 'Unknown error'
 }

@@ -31,6 +31,19 @@ work in v0.3+ safely._
   `service/`, ESLint on `mmgis-tool/HyPlan/`, plus trailing-whitespace,
   EOF-fixer, YAML / JSON / merge-conflict checks.
 
+- **Structured service errors** with stable codes.  Service responses
+  for failures now carry
+  `detail: {message, code, operation}` instead of a bare string.
+  `HyPlanValueError` / `HyPlanTypeError` consistently map to **400** with
+  `code: hyplan_value_error` / `hyplan_type_error` (previously most
+  endpoints returned a generic 500 with a stringified traceback for
+  these user-actionable errors).  Other `HyPlanError` subclasses map to
+  `400 / hyplan_error`; unexpected exceptions stay 500 with
+  `code: internal_error` and a full server-side traceback.  Legacy
+  string-shaped `detail` is preserved for FastAPI validation errors and
+  the simple input-validation paths; the frontend's `getErrorMessage`
+  handles both shapes.
+
 ## v0.1.0 — 2026-05-12
 
 Initial public-facing release of the MMGIS plugin for HyPlan.  Tracks

@@ -44,7 +44,7 @@ import hyplan
 from hyplan.aircraft import Aircraft
 from hyplan.airports import Airport
 from hyplan.campaign import Campaign
-from hyplan.exceptions import HyPlanValueError
+from hyplan.exceptions import HyPlanError, HyPlanValueError, HyPlanTypeError
 from hyplan.flight_box import box_around_polygon, box_around_center_line
 from hyplan.flight_line import FlightLine
 from hyplan.flight_optimizer import greedy_optimize
@@ -143,6 +143,62 @@ def _make_aircraft(name: str) -> Aircraft:
     if cls is None or not isinstance(cls, type) or not issubclass(cls, Aircraft):
         raise HTTPException(status_code=400, detail=f"Unknown aircraft: '{name}'")
     return cls()
+
+
+# ---------------------------------------------------------------------------
+# Error classification
+#
+# Endpoint handlers wrap any HyPlan call in `try: ... except Exception:`
+# and historically rethrew everything as 500.  In practice most of what
+# HyPlan raises is user-actionable (no airports in range, solar zenith
+# unfavourable for glint_arc, degenerate polygon, etc.), so callers
+# want a 400 with a clear `code` they can react to — not an opaque
+# 500.  Endpoints call `_raise_http(operation, exc)` instead of crafting
+# the HTTPException directly; classification + logging live here.
+# ---------------------------------------------------------------------------
+
+def _classify(exc: Exception) -> tuple[int, str]:
+    """Map a Python exception to ``(http_status, error_code)``.
+
+    Known HyPlan exceptions become 400 with a stable ``hyplan_*`` code.
+    Common Python validation errors (ValueError, KeyError) also become
+    400.  Anything else is treated as an unexpected server fault and
+    logged with full traceback.
+    """
+    if isinstance(exc, HyPlanValueError):
+        return 400, "hyplan_value_error"
+    if isinstance(exc, HyPlanTypeError):
+        return 400, "hyplan_type_error"
+    if isinstance(exc, HyPlanError):
+        # Other HyPlan*Error subclasses (HyPlanRuntimeError) — the
+        # planning engine has decided the request can't be fulfilled.
+        # Surface as 400; the caller has more recourse than a 500
+        # implies (different polygon, different aircraft, etc.).
+        return 400, "hyplan_error"
+    if isinstance(exc, (ValueError, KeyError)):
+        return 400, "bad_input"
+    return 500, "internal_error"
+
+
+def _raise_http(operation: str, exc: Exception) -> "HTTPException":
+    """Translate ``exc`` into an HTTPException and raise.
+
+    The response detail is a structured dict so the frontend can show
+    a clean message *and* react programmatically to the code (e.g. a
+    `hyplan_value_error` from `/compute-plan` warrants a different UI
+    treatment than `internal_error`).  500-class errors are logged
+    with a full traceback; 400-class are logged as warnings without
+    one (they're user input issues, not server bugs).
+    """
+    status, code = _classify(exc)
+    if status >= 500:
+        logger.error("%s failed (%s): %s", operation, code, traceback.format_exc())
+    else:
+        logger.warning("%s rejected (%s): %s", operation, code, exc)
+    raise HTTPException(
+        status_code=status,
+        detail={"message": str(exc), "code": code, "operation": operation},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -306,8 +362,7 @@ def wind_grid(req: WindGridRequest):
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("wind-grid fetch failed: %s", traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Wind data fetch failed: {exc}")
+        _raise_http("wind-grid", exc)
 
     # Find closest time and pressure level indices
     target_epoch = target_time.timestamp()
@@ -429,8 +484,7 @@ def generate_lines(req: GenerateLinesRequest):
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("generate-lines failed: %s", traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Generation failed: {exc}")
+        _raise_http("generate-lines", exc)
 
     group_id = campaign.add_flight_lines(
         lines, group_name=box_name, group_type="flight_box",
@@ -526,9 +580,10 @@ def compute_plan(req: ComputePlanRequest):
             takeoff_time=takeoff_time,
             **wind_kwargs,
         )
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.error("compute-plan failed: %s", traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Compute failed: {exc}")
+        _raise_http("compute-plan", exc)
 
     # Convert plan GeoDataFrame to GeoJSON
     plan_geojson = {
@@ -598,9 +653,10 @@ def optimize_sequence(req: OptimizeRequest):
             max_endurance=req.max_endurance,
             max_daily_flight_time=req.max_daily_flight_time,
         )
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.error("optimize failed: %s", traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Optimization failed: {exc}")
+        _raise_http("optimize-sequence", exc)
 
     # Map optimized FlightLine objects back to line IDs
     optimized_lines = result["flight_sequence"]
@@ -1240,7 +1296,14 @@ def optimize_azimuth(req: OptimizeAzimuthRequest):
     # NaN-safe argmax
     valid = ~np.isnan(arr)
     if not valid.any():
-        raise HTTPException(status_code=500, detail="All sweep samples failed.")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "All azimuth sweep samples failed — solar geometry is unfavourable at every heading for this site and time.",
+                "code": "no_valid_sweep_samples",
+                "operation": "optimize-azimuth",
+            },
+        )
     idx_best = int(np.nanargmax(arr))
     optimal_azimuth = float(headings[idx_best])
     optimal_value = float(arr[idx_best])
@@ -1301,8 +1364,7 @@ def solar_position(req: SolarPositionRequest):
             increment=f"{req.increment_min}min",
         )
     except Exception as exc:
-        logger.error("solar-position failed: %s", traceback.format_exc())
-        raise HTTPException(status_code=400, detail=f"solar_position_increments failed: {exc}")
+        _raise_http("solar-position", exc)
 
     times = df["Time"].tolist()
     elevation = [float(e) for e in df["Elevation"].tolist()]
@@ -1531,8 +1593,7 @@ def transform_lines(req: TransformLinesRequest):
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("transform failed: %s", traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Transform failed: {exc}")
+        _raise_http("transform-lines", exc)
 
     _persist_campaign(campaign)
     return {
@@ -1667,13 +1728,11 @@ def generate_pattern(req: PatternRequest):
         )
     except HTTPException:
         raise
-    except HyPlanValueError as exc:
-        # Geometry validation (e.g. solar zenith too high/low for glint_arc)
-        # — these are user-actionable, not server bugs.
-        raise HTTPException(status_code=400, detail=f"{exc}")
     except Exception as exc:
-        logger.error("generate-pattern failed: %s", traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Pattern generation failed: {exc}")
+        # HyPlanValueError (e.g. solar zenith out of range for glint_arc)
+        # and HyPlanTypeError are user-actionable — _classify maps them
+        # to 400.  Anything else becomes a 500.
+        _raise_http("generate-pattern", exc)
 
     # Give the pattern a friendlier name keyed to its kind count in this campaign
     existing_of_kind = sum(1 for p in campaign.patterns if p.kind == req.pattern)
@@ -1830,8 +1889,7 @@ def replace_pattern(req: ReplacePatternRequest):
     try:
         new_pattern = old.regenerate(**req.overrides)
     except Exception as exc:
-        logger.error("replace-pattern regenerate failed: %s", traceback.format_exc())
-        raise HTTPException(status_code=400, detail=f"Regenerate failed: {exc}")
+        _raise_http("replace-pattern", exc)
 
     campaign.replace_pattern(req.pattern_id, new_pattern)
     _persist_campaign(campaign)
