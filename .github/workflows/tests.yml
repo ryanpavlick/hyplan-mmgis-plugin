@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: ryanpavlick/hyplan
-          path: hyplan
+          path: _hyplan_src
           fetch-depth: 0
 
       - name: Install dependencies
@@ -34,43 +34,21 @@ jobs:
           # Match the runtime install path: install hyplan (with winds extras
           # so the wind endpoints' imports resolve), then service deps,
           # then test deps.
-          pip install -e "./hyplan[winds]"
+          #
+          # NB: the HyPlan checkout target is `_hyplan_src`, NOT `hyplan`.
+          # A plain `./hyplan/` dir at cwd is treated by Python as an
+          # implicit PEP 420 namespace package named "hyplan", shadowing
+          # the installed editable hyplan package — every aircraft
+          # re-export (`hyplan.NASA_GV` etc.) becomes invisible and
+          # service/state.py's `getattr(hyplan, name)` returns None.
+          # Putting the source elsewhere sidesteps the shadow.
+          pip install -e "./_hyplan_src[winds]"
           pip install -r service/requirements.txt
           pip install -r tests/requirements.txt
           pip install ruff
 
       - name: Lint (ruff)
         run: ruff check service
-
-      - name: TEMP — dump hyplan namespace
-        run: |
-          python -c "
-          import hyplan, sys
-          print('hyplan __file__:', hyplan.__file__)
-          print('hyplan.aircraft in sys.modules:', 'hyplan.aircraft' in sys.modules)
-          print('hyplan dir (no _):', sorted(k for k in dir(hyplan) if not k.startswith('_')))
-          print()
-          # Try the explicit attribute access path that __init__.py uses.
-          try:
-              from hyplan.aircraft import NASA_GV as _NG
-              print('aircraft.NASA_GV:', _NG)
-          except Exception as e:
-              print('aircraft.NASA_GV failed:', type(e).__name__, e)
-          # Now try to manually re-run the binding from __init__.py
-          import importlib
-          a = importlib.import_module('hyplan.aircraft')
-          print('manual aircraft module:', a)
-          print('manual NASA_GV on it:', hasattr(a, 'NASA_GV'))
-          # Maybe hyplan.__init__ was interrupted; show __init__ source size
-          import os
-          src = os.path.join(os.path.dirname(hyplan.__file__), '__init__.py')
-          print('init.py exists:', os.path.isfile(src), 'size:', os.path.getsize(src) if os.path.isfile(src) else None)
-          with open(src) as f:
-              text = f.read()
-          # Check if the aircraft import line is even in the file
-          print('init.py contains \"NASA_GV,\":', 'NASA_GV,' in text)
-          print('init.py contains \"from .aircraft import\":', 'from .aircraft import' in text)
-          "
 
       - name: Pytest
         # Per-router test suite under tests/routers/.  Uses FastAPI's
@@ -143,7 +121,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: ryanpavlick/hyplan
-          path: hyplan
+          path: _hyplan_src
           fetch-depth: 0
 
       - name: Build service image
@@ -154,7 +132,7 @@ jobs:
         run: |
           docker run -d --name hyplan-svc \
             -p 8100:8100 \
-            -v "$GITHUB_WORKSPACE/hyplan:/hyplan:ro" \
+            -v "$GITHUB_WORKSPACE/_hyplan_src:/hyplan:ro" \
             -e HYPLAN_CAMPAIGNS_DIR=/tmp/hyplan-campaigns \
             hyplan-mmgis-service:ci
           # Give entrypoint.sh time to pip-install hyplan before uvicorn binds.

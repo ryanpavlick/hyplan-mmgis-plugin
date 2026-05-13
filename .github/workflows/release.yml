@@ -42,7 +42,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: ryanpavlick/hyplan
-          path: hyplan
+          path: _hyplan_src
           fetch-depth: 0
 
       # Backstop: refuse to tag a red main.  Mirrors the lint + import
@@ -50,7 +50,10 @@ jobs:
       - name: Install verification deps
         run: |
           pip install --upgrade pip
-          pip install -e "./hyplan[winds]"
+          # Checkout target is _hyplan_src (NOT hyplan) to avoid Python
+          # namespace-package shadowing — see tests.yml for the full
+          # explanation.
+          pip install -e "./_hyplan_src[winds]"
           pip install -r service/requirements.txt
           pip install ruff
       - name: Lint (ruff)

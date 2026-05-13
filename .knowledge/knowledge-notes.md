@@ -4,6 +4,34 @@ Lessons learned from past sessions - gotchas not obvious from reading
 the code.  Add to this file when something surprises you on a clean
 clone.
 
+## Don't check HyPlan out into `./hyplan/` — it shadows the install
+
+In CI we install HyPlan from a sibling checkout: `pip install -e
+"./_hyplan_src[winds]"`.  The checkout target is **deliberately not**
+`./hyplan` because Python's PEP 420 namespace-package finder will
+treat a plain `./hyplan/` directory at the cwd as an implicit
+namespace package named `hyplan`, shadowing the editable install:
+
+```python
+>>> import hyplan
+>>> hyplan.__file__          # None  — namespace package, no module file
+>>> dir(hyplan)              # []    — no aircraft, no FlightLine, nothing
+>>> hyplan.aircraft.NASA_GV  # works — submodule import dotted-path bypasses
+                             #         the shadow, but ``hyplan.NASA_GV``
+                             #         doesn't exist
+```
+
+This caused every NASA_GV / NASA_ER2 test to fail in CI at the
+pytest-harness commit while passing locally (no `./hyplan/` at the
+local cwd).  Failure mode: `make_aircraft("NASA_GV")` →
+`getattr(hyplan, "NASA_GV", None)` → None → 400 "Unknown aircraft:
+'NASA_GV'".
+
+The fix: keep the HyPlan checkout in `_hyplan_src/` (or any name
+that isn't `hyplan`).  Both `release.yml` and `tests.yml` rely on
+this — if you copy the workflow to a new context, preserve the
+`path: _hyplan_src` checkout target.
+
 ## HyPlan `__version__` can be absent on a fresh install
 
 setuptools-scm writes `hyplan/_version.py` at build / install time.
