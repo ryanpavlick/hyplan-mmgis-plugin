@@ -115,6 +115,17 @@ def make_aircraft(name: str) -> Aircraft:
     """Instantiate an aircraft by class name (e.g. ``"NASA_GV"``)."""
     cls = getattr(hyplan, name, None)
     if cls is None or not isinstance(cls, type) or not issubclass(cls, Aircraft):
+        # TEMP DIAGNOSTIC: log what we actually got so we can see why
+        # CI thinks NASA_GV is unknown.  Remove after CI is green.
+        logger.warning(
+            "make_aircraft(%r): cls=%r type=%r isinstance(type)=%r "
+            "issubclass(Aircraft)=%r hyplan_has_attr=%r aircraft_module=%r",
+            name, cls, type(cls).__name__,
+            isinstance(cls, type) if cls is not None else None,
+            (issubclass(cls, Aircraft) if isinstance(cls, type) else None),
+            hasattr(hyplan, name),
+            getattr(hyplan, "aircraft", None),
+        )
         raise HTTPException(status_code=400, detail=f"Unknown aircraft: '{name}'")
     return cls()
 
