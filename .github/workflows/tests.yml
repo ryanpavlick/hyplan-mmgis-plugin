@@ -43,21 +43,33 @@ jobs:
         run: ruff check service
 
       - name: TEMP — dump hyplan namespace
-        # Diagnostic: print whether hyplan exposes NASA_GV after a fresh
-        # install.  If this prints `has NASA_GV: True` but pytest still
-        # fails, the issue is pytest-specific (some module reload, etc).
-        # If False, hyplan itself isn't binding the name in CI.
         run: |
           python -c "
-          import hyplan
-          print('has NASA_GV:', hasattr(hyplan, 'NASA_GV'))
-          print('NASA_GV:', getattr(hyplan, 'NASA_GV', None))
-          print('hyplan keys with N:', [k for k in dir(hyplan) if k.startswith('N')])
-          import hyplan.aircraft as a
-          print('aircraft has NASA_GV:', hasattr(a, 'NASA_GV'))
-          print('aircraft __init__:', a.__file__)
-          import hyplan.aircraft._models as m
-          print('_models has NASA_GV:', hasattr(m, 'NASA_GV'))
+          import hyplan, sys
+          print('hyplan __file__:', hyplan.__file__)
+          print('hyplan.aircraft in sys.modules:', 'hyplan.aircraft' in sys.modules)
+          print('hyplan dir (no _):', sorted(k for k in dir(hyplan) if not k.startswith('_')))
+          print()
+          # Try the explicit attribute access path that __init__.py uses.
+          try:
+              from hyplan.aircraft import NASA_GV as _NG
+              print('aircraft.NASA_GV:', _NG)
+          except Exception as e:
+              print('aircraft.NASA_GV failed:', type(e).__name__, e)
+          # Now try to manually re-run the binding from __init__.py
+          import importlib
+          a = importlib.import_module('hyplan.aircraft')
+          print('manual aircraft module:', a)
+          print('manual NASA_GV on it:', hasattr(a, 'NASA_GV'))
+          # Maybe hyplan.__init__ was interrupted; show __init__ source size
+          import os
+          src = os.path.join(os.path.dirname(hyplan.__file__), '__init__.py')
+          print('init.py exists:', os.path.isfile(src), 'size:', os.path.getsize(src) if os.path.isfile(src) else None)
+          with open(src) as f:
+              text = f.read()
+          # Check if the aircraft import line is even in the file
+          print('init.py contains \"NASA_GV,\":', 'NASA_GV,' in text)
+          print('init.py contains \"from .aircraft import\":', 'from .aircraft import' in text)
           "
 
       - name: Pytest
