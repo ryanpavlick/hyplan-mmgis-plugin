@@ -16,6 +16,35 @@ def test_generate_swaths_for_two_lines(client, campaign_with_lines):
     assert body["swaths"]["type"] == "FeatureCollection"
     # gap_overlap analysis runs when n>=2; assert the keys are present.
     assert "total_pairs" in body["gap_overlap"]
+    # No target_polygon => coverage_fraction is None (skipped).
+    assert body["coverage_fraction"] is None
+
+
+def test_generate_swaths_with_target_polygon_returns_coverage(
+    client, campaign_with_lines, synthetic_polygon,
+):
+    """When the user passes the drawn polygon, /generate-swaths
+    returns a 0-1 coverage fraction."""
+    # Use most of the campaign's lines so we get a meaningful coverage.
+    listing = client.get(f"/campaigns/{campaign_with_lines}").json()
+    line_ids = [f["id"] for f in listing["flight_lines"]["features"][:6]]
+
+    resp = client.post(
+        "/generate-swaths",
+        json={
+            "campaign_id": campaign_with_lines,
+            "line_ids": line_ids,
+            "sensor": "AVIRIS-NG",
+            "target_polygon": synthetic_polygon,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["coverage_fraction"], float)
+    assert 0.0 <= body["coverage_fraction"] <= 1.0
+    # AVIRIS-NG swaths from a 6-line subset of a ~30 nm box should
+    # cover *some* of the target.
+    assert body["coverage_fraction"] > 0.0
 
 
 def test_compute_glint_at_daytime(client, campaign_with_lines):

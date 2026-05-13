@@ -93,6 +93,11 @@ jobs:
         # dormant references); errors fail the build.
         run: npm run lint
 
+      - name: Unit tests (vitest)
+        # Pure-helper tests for mmgis-tool/HyPlan/helpers.js — no
+        # MMGIS host, no DOM.  Fast (~250 ms locally for ~20 tests).
+        run: npm test
+
       - name: Validate MMGIS tool config.json
         # config.json is consumed by MMGIS at startup; a syntax slip is a
         # silent tool-load failure inside MMGIS, so we re-parse it here.

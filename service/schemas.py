@@ -197,6 +197,10 @@ class SwathRequest(BaseModel):
     line_ids: list[str]
     sensor: str
     altitude_msl_m: float = 3000.0
+    # Optional GeoJSON Feature / geometry to score coverage against.
+    # When provided, the response includes ``coverage_fraction`` =
+    # area(target ∩ unary_union(swaths)) / area(target).
+    target_polygon: Optional[dict] = None
 
 
 class GlintRequest(BaseModel):

@@ -46,4 +46,18 @@ module.exports = [
             eqeqeq: ['error', 'always', { null: 'ignore' }],
         },
     },
+    {
+        // Vitest tests for the pure helpers in mmgis-tool/HyPlan.
+        files: ['tests/js/**/*.{js,test.js}'],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: 'module',
+            globals: {
+                ...globals.node,
+            },
+        },
+        rules: {
+            eqeqeq: ['error', 'always', { null: 'ignore' }],
+        },
+    },
 ]

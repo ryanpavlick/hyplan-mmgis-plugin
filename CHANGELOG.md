@@ -56,6 +56,20 @@ work in v0.3+ safely._
   sunpos).  Wired into the `service` job in
   `.github/workflows/tests.yml`.
 
+- **Vitest unit tests for pure frontend helpers** (`tests/js/`).
+  19 tests for `getErrorMessage`, `glintColor`, `formatUtcOffset`,
+  and `parseLocalDateTimeToUtcIso`.  Helpers extracted from
+  `HyPlanTool.js` into a sibling `mmgis-tool/HyPlan/helpers.js` so
+  they're importable outside an MMGIS host.  Wired into the
+  `frontend` CI job.
+
+- **Coverage % readout** for `/generate-swaths`.  When the request
+  includes the user's drawn `target_polygon` (a GeoJSON Feature),
+  the response carries a `coverage_fraction` field
+  (`area(target ∩ union(swaths)) / area(target)`).  The MMGIS panel
+  picks up the drawn polygon via `getDrawnPolygon()` and appends
+  "Coverage: XX.X%" to the swath status line.
+
 - **`AGENTS.md` + `.knowledge/`** for AI-agent onboarding, lifted
   from the MMGIS development branch pattern.  Top-level
   agent-facing entry (critical rules, quick start, architecture,

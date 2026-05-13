@@ -27,9 +27,19 @@ router = APIRouter()
 
 @router.post("/generate-swaths")
 def generate_swaths(req: SwathRequest):
-    """Generate swath footprint polygons for selected flight lines."""
+    """Generate swath footprint polygons for selected flight lines.
+
+    When ``target_polygon`` is supplied, also compute
+    ``coverage_fraction`` = the planar ratio of
+    ``area(target ∩ unary_union(swaths)) / area(target)``.  Both
+    areas are evaluated in the same lat / lon coordinate space, so
+    the projection distortion cancels in the ratio for any single
+    UTM-zone-sized region; pathological cases (antimeridian-crossing
+    polygons, near-pole latitudes) will distort.
+    """
     from hyplan.swath import generate_swath_polygon, analyze_swath_gaps_overlaps
-    from shapely.geometry import mapping as shapely_mapping
+    from shapely.geometry import mapping as shapely_mapping, shape as shapely_shape
+    from shapely.ops import unary_union
 
     campaign = get_campaign(req.campaign_id)
     lines_by_id = campaign.all_flight_lines_dict()
@@ -74,6 +84,21 @@ def generate_swaths(req: SwathRequest):
         except Exception:
             pass
 
+    # Coverage % against the user's target polygon (when provided).
+    coverage_fraction = None
+    if req.target_polygon and swath_polygons:
+        try:
+            target = shapely_shape(
+                req.target_polygon.get("geometry", req.target_polygon)
+            )
+            target_area = target.area
+            if target_area > 0:
+                union = unary_union(swath_polygons)
+                covered = target.intersection(union).area
+                coverage_fraction = max(0.0, min(1.0, covered / target_area))
+        except Exception as exc:
+            warnings.append(f"Coverage computation failed: {exc}")
+
     return {
         "swaths": {
             "type": "FeatureCollection",
@@ -81,6 +106,7 @@ def generate_swaths(req: SwathRequest):
         },
         "count": len(features),
         "gap_overlap": gap_overlap_info,
+        "coverage_fraction": coverage_fraction,
         "warnings": warnings,
     }
 

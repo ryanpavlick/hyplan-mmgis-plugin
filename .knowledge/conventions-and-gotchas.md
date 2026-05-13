@@ -68,11 +68,21 @@ module top, etc.).
 
 ## Frontend (`mmgis-tool/HyPlan/`)
 
-### Single-file convention
+### Single-file convention (with one exception for testable helpers)
 
-Everything lives in `HyPlanTool.js`.  Resist the urge to split it
-into multiple modules - MMGIS plugins are loaded as a single tool
-and the build pipeline is the host MMGIS's, not ours.
+Tool state, UI handlers, and rendering live in `HyPlanTool.js`.
+Resist the urge to split it into many small modules — MMGIS plugins
+are loaded as a single tool and the build pipeline is the host
+MMGIS's, not ours.
+
+**Exception**: pure helpers (no jQuery, no Leaflet, no MMGIS
+singletons) live in a sibling `helpers.js` and are re-exported from
+`HyPlanTool.js`.  This lets us unit-test them under vitest without
+spinning up an MMGIS host.  Current contents of `helpers.js`:
+`getErrorMessage`, `glintColor` / `GLINT_RDYLBU_STOPS`,
+`formatUtcOffset`, `parseLocalDateTimeToUtcIso`.  Add a helper here
+when it's pure; keep DOM access / `L.*` / `Map_.*` in
+`HyPlanTool.js`.
 
 If `HyPlanTool.js` grows past ~3000 lines reconsider; until then the
 existing organization (sections with `// --- ... ---` headers) is the
@@ -133,7 +143,7 @@ CI (`.github/workflows/tests.yml`) runs three jobs:
 | Job             | Python         | What it does                                                                                 |
 | --------------- | -------------- | -------------------------------------------------------------------------------------------- |
 | `service (3.x)` | 3.10/3.11/3.12 | `ruff check service` -> `pytest tests` -> uvicorn start + curl /health, /aircraft, /sensors  |
-| `frontend`      | -              | `npm ci` -> `npm run lint` -> `npm run validate:config`                                      |
+| `frontend`      | -              | `npm ci` -> `npm run lint` -> `npm test` (vitest) -> `npm run validate:config`               |
 | `docker`        | -              | `docker build ./service` -> mount HyPlan -> hit /health                                      |
 
 All three install HyPlan from `ryanpavlick/hyplan@main` (not a release
@@ -168,6 +178,23 @@ The suite **does** make live HyPlan calls (compute_flight_plan,
 GlintArc, sun position), so it's a real integration test of the
 service against HyPlan main rather than a pure unit test.  Mocking
 HyPlan would defeat the point.
+
+## Vitest (JS unit tests)
+
+Pure helpers in `mmgis-tool/HyPlan/helpers.js` are unit-tested by
+`tests/js/helpers.test.js` under vitest.  These tests do **not**
+import `HyPlanTool.js` (which has MMGIS-only relative imports);
+they target the extracted-helper module directly.
+
+Local run:
+
+```bash
+npm test          # one-shot, vitest run mode
+npm run test:watch
+```
+
+Wired into CI's `frontend` job between ESLint and config validation.
+Runs in ~250 ms for ~20 tests, so it's effectively free.
 
 ## Pre-commit hooks
 

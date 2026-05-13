@@ -1,6 +1,12 @@
 import $ from 'jquery'
 import L_ from '../../Basics/Layers_/Layers_'
 import Map_ from '../../Basics/Map_/Map_'
+import {
+    formatUtcOffset,
+    getErrorMessage,
+    glintColor,
+    parseLocalDateTimeToUtcIso,
+} from './helpers.js'
 import './HyPlanTool.css'
 
 // Browser-side controller for the HyPlan MMGIS plugin. This file owns the
@@ -731,6 +737,11 @@ function interfaceWithMMGIS() {
         $('#hyplan-swath-status').text('Generating swaths...')
         $('#hyplan-show-swaths-btn').prop('disabled', true)
 
+        // If a polygon is currently drawn on the map, send it as the
+        // coverage target so the service can score what fraction of
+        // it the selected swaths actually cover.
+        const targetPolygon = getDrawnPolygon()
+
         fetch(`${SERVICE_URL}/generate-swaths`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -739,6 +750,7 @@ function interfaceWithMMGIS() {
                 line_ids: selectedLineIds,
                 sensor: sensor,
                 altitude_msl_m: altitude,
+                target_polygon: targetPolygon || null,
             }),
         })
         .then(r => r.json())
@@ -763,6 +775,10 @@ function interfaceWithMMGIS() {
             let status = `${data.count} swath(s) displayed.`
             if (data.gap_overlap && data.gap_overlap.total_pairs > 0) {
                 status += ` Overlaps: ${data.gap_overlap.overlapping_pairs}, Gaps: ${data.gap_overlap.gap_pairs}`
+            }
+            if (typeof data.coverage_fraction === 'number') {
+                const pct = (data.coverage_fraction * 100).toFixed(1)
+                status += ` Coverage: ${pct}%`
             }
             $('#hyplan-swath-status').text(status)
             $('#hyplan-show-swaths-btn').hide()
@@ -1440,20 +1456,7 @@ function interfaceWithMMGIS() {
 // --- Shared UI / rendering helpers -----------------------------------------
 
 function getTakeoffTimeUtcIso() {
-    const raw = ($('#hyplan-takeoff-time').val() || '').trim()
-    if (!raw) return null
-    const date = new Date(raw)
-    if (Number.isNaN(date.getTime())) return null
-    return date.toISOString().replace('.000Z', 'Z')
-}
-
-function formatUtcOffset(date) {
-    const offsetMin = -date.getTimezoneOffset()
-    const sign = offsetMin >= 0 ? '+' : '-'
-    const absMin = Math.abs(offsetMin)
-    const hours = String(Math.floor(absMin / 60)).padStart(2, '0')
-    const minutes = String(absMin % 60).padStart(2, '0')
-    return `${sign}${hours}:${minutes}`
+    return parseLocalDateTimeToUtcIso($('#hyplan-takeoff-time').val())
 }
 
 function updateTakeoffTimeMeta() {
@@ -1659,62 +1662,10 @@ function updateSelectionStatus() {
     $('#hyplan-solar-from-line-btn').prop('disabled', selected === 0)
 }
 
-function getErrorMessage(data) {
-    // Service errors now come back as either:
-    //   { detail: "string" }                            — FastAPI validation, legacy 400s
-    //   { detail: { message, code, operation } }        — classified by _raise_http
-    // Prefer the structured `message`; fall back to stringifying `detail`
-    // for older error shapes (FastAPI's request-body validation still
-    // returns a list of dicts under `detail`).
-    if (data.detail) {
-        if (typeof data.detail === 'string') return data.detail
-        if (typeof data.detail === 'object' && data.detail.message) return data.detail.message
-        return JSON.stringify(data.detail)
-    }
-    if (data.message) return data.message
-    return 'Unknown error'
-}
-
 // Analysis rendering helpers: glint overlays and pattern decoration that sit
-// alongside the core line/plan layers.
-
-// Approximation of Matplotlib RdYlBu colormap with PowerNorm(gamma=0.4, vmin=0, vmax=90)
-// to match notebooks/glint_analysis.ipynb Cell 10 styling. Red = low glint angle (bad,
-// near-specular), blue = high (good).
-const _GLINT_RDYLBU_STOPS = [
-    [0.00, [165,   0,  38]],
-    [0.10, [215,  48,  39]],
-    [0.20, [244, 109,  67]],
-    [0.30, [253, 174,  97]],
-    [0.40, [254, 224, 144]],
-    [0.50, [255, 255, 191]],
-    [0.60, [224, 243, 248]],
-    [0.70, [171, 217, 233]],
-    [0.80, [116, 173, 209]],
-    [0.90, [ 69, 117, 180]],
-    [1.00, [ 49,  54, 149]],
-]
-
-function glintColor(angleDeg) {
-    if (angleDeg == null || isNaN(angleDeg)) return '#888'
-    const x = Math.max(0, Math.min(angleDeg, 90)) / 90
-    const t = Math.pow(x, 0.4)  // PowerNorm(gamma=0.4)
-    let lo = _GLINT_RDYLBU_STOPS[0]
-    let hi = _GLINT_RDYLBU_STOPS[_GLINT_RDYLBU_STOPS.length - 1]
-    for (let i = 1; i < _GLINT_RDYLBU_STOPS.length; i++) {
-        if (t <= _GLINT_RDYLBU_STOPS[i][0]) {
-            lo = _GLINT_RDYLBU_STOPS[i - 1]
-            hi = _GLINT_RDYLBU_STOPS[i]
-            break
-        }
-    }
-    const span = hi[0] - lo[0]
-    const frac = span > 0 ? (t - lo[0]) / span : 0
-    const r = Math.round(lo[1][0] + (hi[1][0] - lo[1][0]) * frac)
-    const g = Math.round(lo[1][1] + (hi[1][1] - lo[1][1]) * frac)
-    const b = Math.round(lo[1][2] + (hi[1][2] - lo[1][2]) * frac)
-    return `rgb(${r}, ${g}, ${b})`
-}
+// alongside the core line/plan layers.  Pure helpers (getErrorMessage,
+// glintColor, formatUtcOffset, parseLocalDateTimeToUtcIso) live in
+// helpers.js so they can be unit-tested without the MMGIS host.
 
 function renderGlintSummary(summary, thresholdDeg) {
     const $box = $('#hyplan-glint-summary')
