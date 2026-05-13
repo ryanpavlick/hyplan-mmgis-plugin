@@ -1,4 +1,4 @@
-"""Metadata endpoints: ``/health``, ``/aircraft``, ``/sensors``.
+"""Metadata endpoints: ``/``, ``/health``, ``/aircraft``, ``/sensors``.
 
 These read static registry information out of HyPlan and serve as the
 service's "what can I plan with" surface for the MMGIS frontend.
@@ -12,6 +12,30 @@ from fastapi import APIRouter
 from ..schemas import HealthResponse
 
 router = APIRouter()
+
+
+@router.get("/")
+def index():
+    """Friendly landing page so ``GET /`` doesn't 404 in a browser.
+
+    Returns a small JSON manifest with pointers to the interactive
+    docs, health probe, and the two registry endpoints the MMGIS
+    frontend uses to populate selectors.
+    """
+    return {
+        "service": "HyPlan Service",
+        "version": "0.2.0",
+        "hyplan_version": getattr(hyplan, "__version__", "unknown"),
+        "links": {
+            "docs": "/docs",
+            "openapi": "/openapi.json",
+            "health": "/health",
+            "aircraft": "/aircraft",
+            "sensors": "/sensors",
+            "imagery_layers": "/imagery-layers",
+        },
+        "source": "https://github.com/ryanpavlick/hyplan-mmgis-plugin",
+    }
 
 
 @router.get("/health", response_model=HealthResponse)
