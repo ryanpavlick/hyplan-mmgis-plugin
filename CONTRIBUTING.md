@@ -49,6 +49,12 @@ project so please be patient.
    ```bash
    git checkout -b my-feature
    ```
+5. **Install pre-commit hooks** (optional but recommended) so commits
+   are linted locally before they hit CI:
+   ```bash
+   pip install pre-commit
+   pre-commit install
+   ```
 
 ## Development Workflow
 

@@ -6,9 +6,30 @@ The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project follows [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## v0.2.0 (unreleased)
 
-_No changes yet._
+_DevEx + tests release.  Lays the groundwork for landing larger feature
+work in v0.3+ safely._
+
+### Changed
+
+- **GitHub Actions pins bumped to Node 24 runtime.**  `actions/checkout`
+  v4 → v6, `actions/setup-python` v5 → v6, `actions/setup-node` v4 →
+  v6.  Clears the Node 20 deprecation banner that appeared on every
+  v0.1.0 run.
+
+- **Release housekeeping moved inline into `release.yml`.**  At v0.1.0
+  the standalone `post-release.yml` never fired because a workflow's
+  `GITHUB_TOKEN` does not trigger derivative `push: tags:` workflows.
+  `release.yml` now bumps `CITATION.cff`, regenerates the SECURITY.md
+  supported-versions table, commits, tags, and creates the GitHub
+  Release in one job.  `post-release.yml` deleted.
+
+### Added
+
+- **`.pre-commit-config.yaml`** mirroring CI's lint surface: ruff on
+  `service/`, ESLint on `mmgis-tool/HyPlan/`, plus trailing-whitespace,
+  EOF-fixer, YAML / JSON / merge-conflict checks.
 
 ## v0.1.0 — 2026-05-12
 

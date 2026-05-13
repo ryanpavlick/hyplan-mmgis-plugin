@@ -1,0 +1,45 @@
+# Pre-commit hooks.  Install once per clone with:
+#
+#     pip install pre-commit
+#     pre-commit install
+#
+# Hooks run on `git commit` and block the commit if any fail.  The
+# ruff + eslint invocations match the CI lint steps in
+# .github/workflows/tests.yml so anything that lands in main has
+# already been linted locally.
+#
+# To run hooks against the whole tree (e.g. after pulling new config):
+#
+#     pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+      - id: ruff-check
+        # Match CI's invocation exactly — service/ only.
+        files: ^service/.*\.py$
+
+  - repo: https://github.com/pre-commit/mirrors-eslint
+    rev: v9.16.0
+    hooks:
+      - id: eslint
+        files: ^mmgis-tool/HyPlan/.*\.js$
+        # Use the repo-root flat config; pin the same major as the
+        # devDependency in package.json so they don't drift.
+        additional_dependencies:
+          - eslint@9.16.0
+          - "@eslint/js@9.16.0"
+          - globals@15.14.0
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+        # mmgis-tool/HyPlan/config.json is what CI validates separately
+        # via `npm run validate:config`; the generic check-json hook
+        # picks up any other JSON we add to the repo.
+      - id: check-merge-conflict

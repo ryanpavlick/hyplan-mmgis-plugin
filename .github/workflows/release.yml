@@ -1,10 +1,19 @@
 name: Release
 
-# Manual release workflow: bumps CITATION.cff to the requested version,
-# tags v<VERSION>, and creates a GitHub Release with notes pulled from the
-# matching CHANGELOG.md section.  Unlike HyPlan, this repo does not publish
-# to PyPI — the service is consumed as source / Docker image, and the
-# frontend tool is copied into an MMGIS tree.
+# Manual release workflow.  In one job we:
+#   1. Verify main is green (ruff + import smoke).
+#   2. Bump CITATION.cff to <VERSION>.
+#   3. Regenerate the SECURITY.md "Supported versions" table from the
+#      full tag history + the new version.
+#   4. Commit (if anything changed), tag v<VERSION>, push.
+#   5. Extract release notes from CHANGELOG and create a GitHub Release.
+#
+# All housekeeping is intentionally inline (rather than split between a
+# release + post-release workflow) because a workflow's GITHUB_TOKEN
+# does not trigger derivative `push: tags:` workflows — we learned this
+# at v0.1.0 when post-release.yml never fired.  Unlike HyPlan, this repo
+# does not publish to PyPI — the service is consumed as source / Docker
+# image, and the frontend tool is copied into an MMGIS tree.
 
 on:
   workflow_dispatch:
@@ -20,16 +29,17 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: main
+          fetch-depth: 0   # need full tag history for SECURITY.md regen
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
       - name: Check out HyPlan (for service smoke)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ryanpavlick/hyplan
           path: hyplan
@@ -54,34 +64,93 @@ jobs:
           sed -i "s/^version: .*/version: ${VERSION}/" CITATION.cff
           echo "Updated CITATION.cff to version ${VERSION}"
 
+      - name: Regenerate SECURITY.md supported-versions table
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          python <<'PY'
+          import os, re, subprocess
+
+          version = os.environ["VERSION"]
+          major, minor, _patch = version.split(".")
+          supported_minor = f"{major}.{minor}"
+          supported_label = f"{supported_minor}.x"
+
+          # Existing tags + the new one we're about to cut.
+          out = subprocess.check_output(["git", "tag"], text=True)
+          tag_re = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+          tags = [m.group(0).lstrip("v") for line in out.split()
+                  if (m := tag_re.match(line))]
+          minors = {f"{t.split('.')[0]}.{t.split('.')[1]}" for t in tags}
+          minors.add(supported_minor)
+          minors_sorted = sorted(
+              minors, key=lambda x: tuple(int(p) for p in x.split(".")), reverse=True
+          )
+
+          supported_major = major
+          rows = [
+              "| Version  | Supported          |",
+              "|----------|--------------------|",
+          ]
+          older_majors_present = False
+          for m in minors_sorted:
+              m_major = m.split(".")[0]
+              label = f"{m}.x"
+              if m_major != supported_major:
+                  older_majors_present = True
+                  continue
+              if m == supported_minor:
+                  rows.append(f"| {label:<8} | :white_check_mark: |")
+              else:
+                  rows.append(f"| {label:<8} | :x: (use {supported_label})    |")
+          if older_majors_present or supported_major != "0":
+              rows.append(f"| < {supported_major}.0    | :x:                |")
+          new_table = "\n".join(rows) + "\n"
+
+          with open("SECURITY.md") as f:
+              content = f.read()
+
+          pattern = re.compile(
+              r"\| Version  \| Supported          \|\n"
+              r"\|----------\|--------------------\|\n"
+              r"(?:\|.*\|\n)+",
+              re.MULTILINE,
+          )
+          if not pattern.search(content):
+              raise SystemExit("Could not locate supported-versions table in SECURITY.md")
+
+          new_content = pattern.sub(new_table, content, count=1)
+          if new_content == content:
+              print("SECURITY.md already up to date.")
+          else:
+              with open("SECURITY.md", "w") as f:
+                  f.write(new_content)
+              print(f"SECURITY.md updated for {supported_label}.")
+          PY
+
       - name: Commit and tag
         run: |
           VERSION=${{ github.event.inputs.version }}
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # CITATION.cff may already be at the target version (e.g. when a
-          # contributor pre-bumped it).  In that case skip the commit and
-          # tag the current HEAD as-is.
-          if git diff --quiet -- CITATION.cff; then
-            echo "CITATION.cff already at v${VERSION}; tagging current HEAD."
+          # CITATION.cff and SECURITY.md may already be up-to-date (a
+          # contributor pre-bumped them, or this is a re-run after a
+          # workflow failure).  Skip the commit in that case.
+          if git diff --quiet -- CITATION.cff SECURITY.md; then
+            echo "Release files already up to date; tagging current HEAD."
           else
-            git add CITATION.cff
+            git add CITATION.cff SECURITY.md
             git commit -m "Release v${VERSION}"
           fi
-          # The `v` prefix is load-bearing — post-release.yml only
-          # triggers on `v[0-9]+.[0-9]+.[0-9]+` tags.
           git tag "v${VERSION}"
           git push origin main --tags
 
       - name: Extract release notes from CHANGELOG
-        id: notes
         run: |
           VERSION=${{ github.event.inputs.version }}
-          # Extract the section for this version (between ## vX.Y.Z [...]
-          # and the next ## or EOF).  The header line typically carries a
-          # trailing em-dash + date, e.g. ``## v0.1.0 — 2026-05-12``, so
-          # the match anchor is "start of line + ## vX.Y.Z" followed by
-          # any of: end-of-line, space, or tab.
+          # Match `## vX.Y.Z` followed by end-of-line or whitespace
+          # (header lines typically carry a trailing em-dash + date,
+          # e.g. ``## v0.1.0 — 2026-05-12``).  Stop at the next ``## ``.
           awk "/^## v${VERSION}([ \\t]|\$)/{found=1; next} /^## /{if(found) exit} found{print}" CHANGELOG.md > /tmp/release_notes.md
           n=$(wc -l < /tmp/release_notes.md)
           echo "Extracted ${n} lines of release notes"
