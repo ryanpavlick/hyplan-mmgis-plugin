@@ -248,7 +248,10 @@ class ExportResponse(BaseModel):
 
 @app.get("/health", response_model=HealthResponse)
 def health():
-    return HealthResponse(hyplan_version=hyplan.__version__)
+    # setuptools-scm writes hyplan/_version.py at install time; if hyplan
+    # is imported from a source tree that hasn't been built, __version__
+    # may be missing.  Fall back to "unknown" rather than 500ing /health.
+    return HealthResponse(hyplan_version=getattr(hyplan, "__version__", "unknown"))
 
 
 @app.post("/wind-grid")
