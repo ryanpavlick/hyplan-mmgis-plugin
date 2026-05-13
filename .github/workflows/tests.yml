@@ -42,6 +42,24 @@ jobs:
       - name: Lint (ruff)
         run: ruff check service
 
+      - name: TEMP — dump hyplan namespace
+        # Diagnostic: print whether hyplan exposes NASA_GV after a fresh
+        # install.  If this prints `has NASA_GV: True` but pytest still
+        # fails, the issue is pytest-specific (some module reload, etc).
+        # If False, hyplan itself isn't binding the name in CI.
+        run: |
+          python -c "
+          import hyplan
+          print('has NASA_GV:', hasattr(hyplan, 'NASA_GV'))
+          print('NASA_GV:', getattr(hyplan, 'NASA_GV', None))
+          print('hyplan keys with N:', [k for k in dir(hyplan) if k.startswith('N')])
+          import hyplan.aircraft as a
+          print('aircraft has NASA_GV:', hasattr(a, 'NASA_GV'))
+          print('aircraft __init__:', a.__file__)
+          import hyplan.aircraft._models as m
+          print('_models has NASA_GV:', hasattr(m, 'NASA_GV'))
+          "
+
       - name: Pytest
         # Per-router test suite under tests/routers/.  Uses FastAPI's
         # TestClient (no uvicorn process), so it's fast and covers the
