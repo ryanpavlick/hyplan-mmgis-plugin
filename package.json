@@ -1,0 +1,14 @@
+{
+  "name": "hyplan-mmgis-plugin-tooling",
+  "private": true,
+  "description": "Repo-root tooling (ESLint config + JSON sanity) for the HyPlan MMGIS plugin. The actual plugin code is in mmgis-tool/HyPlan and is built by an MMGIS host tree.",
+  "scripts": {
+    "lint": "eslint mmgis-tool/HyPlan",
+    "validate:config": "node -e \"JSON.parse(require('fs').readFileSync('mmgis-tool/HyPlan/config.json','utf8'))\""
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.16.0",
+    "eslint": "^9.16.0",
+    "globals": "^15.14.0"
+  }
+}

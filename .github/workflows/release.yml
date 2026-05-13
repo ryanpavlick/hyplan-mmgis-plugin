@@ -1,0 +1,93 @@
+name: Release
+
+# Manual release workflow: bumps CITATION.cff to the requested version,
+# tags v<VERSION>, and creates a GitHub Release with notes pulled from the
+# matching CHANGELOG.md section.  Unlike HyPlan, this repo does not publish
+# to PyPI — the service is consumed as source / Docker image, and the
+# frontend tool is copied into an MMGIS tree.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.2.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check out HyPlan (for service smoke)
+        uses: actions/checkout@v4
+        with:
+          repository: ryanpavlick/hyplan
+          path: hyplan
+          fetch-depth: 0
+
+      # Backstop: refuse to tag a red main.  Mirrors the lint + import
+      # smoke step in tests.yml; a full matrix run already lives there.
+      - name: Install verification deps
+        run: |
+          pip install --upgrade pip
+          pip install -e "./hyplan[winds]"
+          pip install -r service/requirements.txt
+          pip install ruff
+      - name: Lint (ruff)
+        run: ruff check service
+      - name: Import smoke
+        run: python -c "import service.app as s; assert s.app is not None"
+
+      - name: Update CITATION.cff version
+        run: |
+          VERSION=${{ github.event.inputs.version }}
+          sed -i "s/^version: .*/version: ${VERSION}/" CITATION.cff
+          echo "Updated CITATION.cff to version ${VERSION}"
+
+      - name: Commit and tag
+        run: |
+          VERSION=${{ github.event.inputs.version }}
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CITATION.cff
+          git commit -m "Release v${VERSION}"
+          # The `v` prefix is load-bearing — post-release.yml only
+          # triggers on `v[0-9]+.[0-9]+.[0-9]+` tags.
+          git tag "v${VERSION}"
+          git push origin main --tags
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          VERSION=${{ github.event.inputs.version }}
+          # Extract the section for this version (between ## vX.Y.Z [...]
+          # and the next ## or EOF).  The header line typically carries a
+          # trailing em-dash + date, e.g. ``## v0.1.0 — 2026-05-12``, so
+          # the match anchor is "start of line + ## vX.Y.Z" followed by
+          # any of: end-of-line, space, or tab.
+          awk "/^## v${VERSION}([ \\t]|\$)/{found=1; next} /^## /{if(found) exit} found{print}" CHANGELOG.md > /tmp/release_notes.md
+          n=$(wc -l < /tmp/release_notes.md)
+          echo "Extracted ${n} lines of release notes"
+          if [ "${n}" -lt 3 ]; then
+            echo "::error::Release notes for v${VERSION} are suspiciously short (${n} lines).  Check the CHANGELOG header format."
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=${{ github.event.inputs.version }}
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes-file /tmp/release_notes.md

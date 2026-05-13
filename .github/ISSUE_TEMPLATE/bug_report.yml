@@ -1,0 +1,108 @@
+name: Bug report
+description: Report a defect in hyplan-mmgis-plugin
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill out the
+        sections below so the maintainers can reproduce and fix it.
+
+        If the bug is in HyPlan itself (planning engine, aircraft
+        performance, glint computation, etc.) please file it at
+        <https://github.com/ryanpavlick/hyplan/issues> instead.  Bugs
+        in MMGIS itself go to
+        <https://github.com/NASA-AMMOS/MMGIS/issues>.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Where does the bug live?
+      options:
+        - Service (FastAPI backend)
+        - Frontend MMGIS tool
+        - Both / unclear
+        - Docs / README
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+      placeholder: When I click "Generate Lines" with a drawn polygon, the service returns ...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: |
+        Smallest possible steps that trigger the bug.  A `curl` invocation
+        against a running service, or a short list of UI clicks starting
+        from a clean MMGIS map, is ideal.  Please use synthetic geometry
+        rather than internal campaign files.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: hyplan-mmgis-plugin version / commit
+      placeholder: "e.g. 0.1.0, or commit short SHA"
+    validations:
+      required: true
+  - type: input
+    id: hyplan-version
+    attributes:
+      label: HyPlan version
+      placeholder: 'e.g. 1.6.3 (python -c "import hyplan; print(hyplan.__version__)")'
+    validations:
+      required: true
+  - type: input
+    id: mmgis-version
+    attributes:
+      label: MMGIS version / commit
+      description: Only required for frontend bugs.
+      placeholder: "e.g. MMGIS 3.x release / commit SHA"
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "e.g. 3.11.5"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system (where the service runs)
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Docker
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Service logs / browser console (if any)
+      description: |
+        Service uvicorn output, or browser devtools console / network panel
+        for frontend bugs.
+      render: shell
+  - type: textarea
+    id: extras
+    attributes:
+      label: Anything else?
+      description: |
+        Wind source in use, aircraft / sensor selection, takeoff time, or
+        anything else that might be load-bearing for the bug.

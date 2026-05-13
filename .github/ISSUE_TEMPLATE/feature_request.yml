@@ -1,0 +1,58 @@
+name: Feature request
+description: Suggest a new capability for hyplan-mmgis-plugin
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement! Before opening this, please
+        check the existing issues and discussions to see if it's already
+        been raised.
+
+        Features that belong in the HyPlan core library (new planning
+        algorithms, aircraft, sensor models, etc.) should be filed at
+        <https://github.com/ryanpavlick/hyplan/issues>.  This repo is
+        for the MMGIS-facing service and tool only.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of the plugin would this feature touch?
+      options:
+        - Service (FastAPI backend)
+        - Frontend MMGIS tool
+        - Both
+        - Docs / README
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: |
+        What planning workflow or analysis task would this enable that is
+        hard or impossible today? Concrete mission examples are very
+        welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API or behaviour
+      description: |
+        For service changes: example request/response JSON.  For frontend
+        changes: a short description of the UI flow.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        Existing endpoints, MMGIS tools, or workarounds you've already
+        considered.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context

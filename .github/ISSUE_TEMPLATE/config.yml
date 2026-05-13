@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: HyPlan core library
+    url: https://github.com/ryanpavlick/hyplan/issues
+    about: For bugs or feature requests in HyPlan itself (planning engine, aircraft, glint, etc.) — not in the MMGIS plugin.
+  - name: MMGIS
+    url: https://github.com/NASA-AMMOS/MMGIS/issues
+    about: For bugs or feature requests in MMGIS itself — not in the HyPlan plugin.
+  - name: Question / discussion
+    url: https://github.com/ryanpavlick/hyplan-mmgis-plugin/discussions
+    about: For usage questions and open-ended discussion (rather than confirmed bugs or feature requests).

@@ -1,0 +1,132 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # --- Python service: lint and import smoke -------------------------------
+  service:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Check out HyPlan
+        uses: actions/checkout@v4
+        with:
+          repository: ryanpavlick/hyplan
+          path: hyplan
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          # Match the runtime install path: install hyplan (with winds extras
+          # so the wind endpoints' imports resolve), then service deps.
+          pip install -e "./hyplan[winds]"
+          pip install -r service/requirements.txt
+          pip install ruff
+
+      - name: Lint (ruff)
+        run: ruff check service
+
+      - name: Import smoke
+        # Verifies every hyplan API the service depends on still resolves
+        # against current main, and the FastAPI app object constructs.
+        run: |
+          python -c "import service.app as s; assert s.app is not None; print('service imported ok')"
+
+      - name: Service start smoke
+        # Start uvicorn, hit /health and /aircraft and /sensors, stop.
+        # Catches lifespan handler regressions and bad imports that only
+        # surface at startup.
+        env:
+          HYPLAN_CAMPAIGNS_DIR: /tmp/hyplan-campaigns
+        run: |
+          mkdir -p "$HYPLAN_CAMPAIGNS_DIR"
+          python -m uvicorn service.app:app --host 127.0.0.1 --port 8100 \
+            --log-level warning &
+          SERVICE_PID=$!
+          # Wait up to 30s for the service to become reachable.
+          for i in $(seq 1 60); do
+            if curl -fs http://127.0.0.1:8100/health >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.5
+          done
+          set -e
+          curl -fs http://127.0.0.1:8100/health   | python -m json.tool
+          curl -fs http://127.0.0.1:8100/aircraft | python -c "import json,sys; d=json.load(sys.stdin); assert len(d['aircraft'])>0"
+          curl -fs http://127.0.0.1:8100/sensors  | python -c "import json,sys; d=json.load(sys.stdin); assert len(d['sensors'])>0"
+          kill $SERVICE_PID
+
+  # --- Frontend MMGIS tool: lint + config sanity ---------------------------
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dev dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint (ESLint)
+        # @eslint/js recommended rules — catches undefined vars, unused
+        # declarations, unreachable code, etc.  Warnings are intentionally
+        # non-blocking (existing file has a handful of intentionally
+        # dormant references); errors fail the build.
+        run: npm run lint
+
+      - name: Validate MMGIS tool config.json
+        # config.json is consumed by MMGIS at startup; a syntax slip is a
+        # silent tool-load failure inside MMGIS, so we re-parse it here.
+        run: npm run validate:config
+
+  # --- Service Docker image build smoke -----------------------------------
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out HyPlan
+        uses: actions/checkout@v4
+        with:
+          repository: ryanpavlick/hyplan
+          path: hyplan
+          fetch-depth: 0
+
+      - name: Build service image
+        run: docker build -t hyplan-mmgis-service:ci ./service
+
+      - name: Run image and hit /health
+        # The image expects /hyplan to be a mounted HyPlan source tree.
+        run: |
+          docker run -d --name hyplan-svc \
+            -p 8100:8100 \
+            -v "$GITHUB_WORKSPACE/hyplan:/hyplan:ro" \
+            -e HYPLAN_CAMPAIGNS_DIR=/tmp/hyplan-campaigns \
+            hyplan-mmgis-service:ci
+          # Give entrypoint.sh time to pip-install hyplan before uvicorn binds.
+          for i in $(seq 1 120); do
+            if curl -fs http://127.0.0.1:8100/health >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fs http://127.0.0.1:8100/health | python -m json.tool
+          docker logs hyplan-svc | tail -50
+          docker rm -f hyplan-svc
