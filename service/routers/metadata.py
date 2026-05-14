@@ -29,7 +29,7 @@ _INDEX_LINKS = [
 def _build_manifest() -> dict:
     return {
         "service": "HyPlan Service",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "hyplan_version": getattr(hyplan, "__version__", "unknown"),
         "links": {key: path for key, path, _ in _INDEX_LINKS},
         "source": "https://github.com/ryanpavlick/hyplan-mmgis-plugin",

@@ -6,6 +6,14 @@ The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project follows [Semantic Versioning](https://semver.org/).
 
+## v0.3.0 (unreleased)
+
+_HyPlan v1.7 features the plugin doesn't expose yet — pattern movement
+(`Pattern.translate / move_to / rotate / from_relative`) and geodesic
+waypoint placement (`Waypoint.relative_to`), surfaced through the
+service and the MMGIS panel.  Plus a 10-minute walkthrough doc for
+new users._
+
 ## v0.2.0 — 2026-05-13
 
 _DevEx + tests release.  Lays the groundwork for landing larger feature
