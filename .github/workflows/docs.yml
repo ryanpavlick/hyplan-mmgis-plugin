@@ -42,6 +42,11 @@ jobs:
       - name: Configure Pages
         id: pages
         uses: actions/configure-pages@v5
+        with:
+          # Auto-enable Pages on first deploy so the repo doesn't need
+          # a manual Settings → Pages click before this workflow runs.
+          # Requires `pages: write` permission (set above).
+          enablement: true
 
       - name: Build site
         env:
