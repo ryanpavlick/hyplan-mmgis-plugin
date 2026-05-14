@@ -45,6 +45,7 @@ from .routers import (
     compute,
     export,
     generate,
+    isochrones,
     lines,
     metadata,
     patterns,
@@ -89,3 +90,4 @@ app.include_router(analysis.router)
 app.include_router(lines.router)
 app.include_router(patterns.router)
 app.include_router(campaigns.router)
+app.include_router(isochrones.router)

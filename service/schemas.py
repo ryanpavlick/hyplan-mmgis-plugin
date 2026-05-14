@@ -270,3 +270,51 @@ class SolarPositionRequest(BaseModel):
     lon: float
     date: str  # YYYY-MM-DD (interpreted in UTC)
     increment_min: int = 10
+
+
+# --- Isochrones ---------------------------------------------------------
+
+class IsochroneStart(BaseModel):
+    """Departure point.  Either an airport ICAO or a free waypoint.
+
+    When ``airport`` is set, it is resolved via :class:`hyplan.airports.Airport`
+    and ``latitude`` / ``longitude`` / ``altitude_msl_m`` are ignored.
+    Otherwise the caller must supply ``latitude``, ``longitude``,
+    ``altitude_msl_m``.
+    """
+    airport: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    altitude_msl_m: Optional[float] = None
+
+
+class IsochroneRequest(BaseModel):
+    """Single-budget wind-aware isochrone (see hyplan.planning.compute_isochrone)."""
+    aircraft: str
+    start: IsochroneStart
+    budget_min: float
+    mode: str = "round_trip"                       # one_way | round_trip | return_safe
+    return_destination: Optional[IsochroneStart] = None
+    cruise_altitude_m: Optional[float] = None
+    on_station_time_min: float = 0.0
+    reserve_min: float = 0.0
+    start_time: Optional[str] = None               # ISO 8601 UTC
+    wind: dict = Field(default_factory=lambda: {"kind": "still_air"})
+    azimuth_resolution_deg: float = 5.0
+    distance_tolerance_nmi: float = 0.5
+    ray_strategy: str = "uniform"
+
+
+class ConcentricIsochroneRequest(IsochroneRequest):
+    # Multiple contours in one call.  ``budget_min`` from the base class
+    # is ignored; ``budgets_min`` is the list to sweep.
+    budgets_min: list[float] = Field(..., min_length=1)
+
+
+class RefuelIsochroneRequest(IsochroneRequest):
+    # ``budget_min`` becomes the per-cycle sortie budget; ``flight_day_budget_min``
+    # is the wall-clock cap.  ``refuel_airports`` is a list of ICAO codes.
+    flight_day_budget_min: float
+    refuel_airports: list[str] = Field(..., min_length=1)
+    refuel_time_min: float = 60.0
+    max_refuel_stops: int = 1

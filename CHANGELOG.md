@@ -154,6 +154,35 @@ concurrent overwrites._
   list.  The previous implicit "one campaign per tab session"
   model is gone.
 
+- **Wind-aware reach / isochrone endpoints.**  Three new POST routes
+  wrap `hyplan.planning.compute_isochrone`,
+  `compute_concentric_isochrones`, and `compute_refuel_isochrone`:
+  - `POST /isochrone` — single budget, returns one closed-boundary
+    `Polygon` Feature plus one `Point` Feature per ray
+    (azimuth_deg, distance_nmi, total_time_min, limiting_leg…) and
+    a `summary` carrying `gdf.attrs`.
+  - `POST /isochrone-concentric` — sweeps multiple budgets in one
+    O(M+N) pass, emits one Polygon per budget.
+  - `POST /isochrone-refuel` — two-clock reach with a single
+    optional refuel stop; extra ray properties expose the chosen
+    itinerary (`itinerary`, `refuel_airport`, `day_total_time_min`,
+    `sortie_cycle_*_min`, margins).
+  - Start accepts either `{airport: "KSBP"}` or
+    `{latitude, longitude, altitude_msl_m}`.  Wind reuses the
+    `/compute-plan` shape (`still_air` / `constant` implemented;
+    gridded sources return 400 with a clear "not yet supported"
+    message — gridded isochrones need a planning bbox we don't have).
+  - 9 new pytest cases (still-air round-trip, waypoint start,
+    waypoint-without-altitude 400, unknown-airport 400, gridded
+    wind rejection, constant wind, concentric multi-budget,
+    empty-budgets 422, refuel happy path).  Total pytest: **103**.
+- **Reach (Isochrone) panel section** (4d).  Start airport (defaults
+  to Section 1 takeoff), comma-separated budgets in minutes
+  (single value → `/isochrone`, multiple → `/isochrone-concentric`),
+  mode selector, reserve.  Aircraft + wind are inherited from
+  Section 1.  Polygons render in `#0ea5e9` with a per-budget
+  tooltip; Clear button removes the layer.
+
 ## v0.3.0 — 2026-05-14
 
 _HyPlan v1.7 features the plugin doesn't expose yet — pattern movement

@@ -179,6 +179,53 @@ Wind modes currently supported:
 
 The resulting plan is cached server-side for export.
 
+### `POST /isochrone`
+
+Single-budget wind-aware reach contour around a start point.  Wraps
+`hyplan.planning.compute_isochrone`.
+
+Request:
+
+```json
+{
+  "aircraft": "NASA_GV",
+  "start": {"airport": "KSBP"},
+  "budget_min": 120,
+  "mode": "round_trip",
+  "wind": {"kind": "still_air"},
+  "reserve_min": 0,
+  "azimuth_resolution_deg": 5.0
+}
+```
+
+`start` accepts either `{airport: "ICAO"}` or
+`{latitude, longitude, altitude_msl_m}`.  `mode` is one of
+`one_way` / `round_trip` / `return_safe` (the latter needs
+`return_destination`).  Wind kinds `still_air` and `constant`
+(`{kind, speed_kt, direction_deg}`) are implemented; gridded sources
+return 400.
+
+Response is a GeoJSON `FeatureCollection`:
+
+- one `Polygon` Feature (the closed boundary)
+- one `Point` Feature per ray with `azimuth_deg`, `target_lat/lon`,
+  `distance_nmi`, `total_time_min`, `limiting_leg`
+- top-level `summary` carrying the underlying GeoDataFrame's
+  `attrs` (mode, n_rays, wind_source_kind, …)
+
+### `POST /isochrone-concentric`
+
+Same as `/isochrone` but accepts `budgets_min: [60, 120, 180]` and
+emits one Polygon per budget in one O(M+N) sweep.
+
+### `POST /isochrone-refuel`
+
+Refuel-aware reach with a single optional fuel stop.  Adds
+`flight_day_budget_min`, `refuel_airports: ["ICAO", ...]`,
+`refuel_time_min`, `max_refuel_stops`.  Ray properties include the
+chosen `itinerary`, `refuel_airport`, per-cycle sortie times, and
+day-budget margins.
+
 ## Analysis
 
 ### `POST /wind-grid`

@@ -40,6 +40,7 @@ let drawLineMode = false
 let drawLineStart = null
 let patternCenter = null
 let solarMarkerLayer = null
+let reachLayer = null
 
 // --- Self-heal against MMGIS layer-state resets ---------------------------
 // MMGIS toggling a Draw file / layer in the Layers panel can collaterally
@@ -316,6 +317,27 @@ const markup = `
         <button id="hyplan-hide-glint-btn" style="display:none">Hide Glint</button>
         <div id="hyplan-glint-status" class="hyplan-status"></div>
         <div id="hyplan-glint-summary"></div>
+    </details>
+
+    <details class="hyplan-section">
+        <summary>4d. Reach (Isochrone)</summary>
+        <p style="font-size:11px; color:var(--color-c)">Wind-aware reach contour around a start point.  Aircraft / wind come from Section 1.  Start defaults to the takeoff airport.</p>
+        <label>Start airport (ICAO, blank = takeoff)</label>
+        <input type="text" id="hyplan-reach-start-airport" value="" placeholder="e.g. KSBP" />
+        <label>Budgets (minutes, comma-separated for concentric)</label>
+        <input type="text" id="hyplan-reach-budgets" value="120" placeholder="60,120,180" />
+        <label>Mode</label>
+        <select id="hyplan-reach-mode">
+            <option value="round_trip" selected>Round trip</option>
+            <option value="one_way">One way</option>
+            <option value="return_safe">Return safe</option>
+        </select>
+        <label>Reserve (minutes)</label>
+        <input type="number" id="hyplan-reach-reserve" value="0" min="0" step="1" />
+        <button id="hyplan-reach-compute-btn">Compute Reach</button>
+        <button id="hyplan-reach-clear-btn" style="display:none">Clear</button>
+        <div id="hyplan-reach-status" class="hyplan-status"></div>
+        <div id="hyplan-reach-summary" class="hyplan-meta"></div>
     </details>
 
     <details class="hyplan-section">
@@ -1080,6 +1102,119 @@ function interfaceWithMMGIS() {
         $('#hyplan-swath-status').text('')
         $('#hyplan-hide-swaths-btn').hide()
         $('#hyplan-show-swaths-btn').show()
+    })
+
+    // --- Compute Reach (isochrone) ---
+    // Single budget hits /isochrone; 2+ comma-separated values hits
+    // /isochrone-concentric.  Polygons stack in azimuth-sorted order
+    // (largest budget furthest out) so we render them with decreasing
+    // fill opacity and let the smaller contours sit on top.
+    $('#hyplan-reach-compute-btn').on('click', function () {
+        const budgetsStr = ($('#hyplan-reach-budgets').val() || '').trim()
+        if (!budgetsStr) {
+            $('#hyplan-reach-status').text('Enter at least one budget in minutes.')
+            return
+        }
+        const budgets = budgetsStr.split(',').map(s => parseFloat(s.trim())).filter(b => isFinite(b) && b > 0)
+        if (budgets.length === 0) {
+            $('#hyplan-reach-status').text('No valid budgets parsed.')
+            return
+        }
+        const startIcao = ($('#hyplan-reach-start-airport').val() || '').trim()
+            || ($('#hyplan-takeoff-airport').val() || '').trim()
+        if (!startIcao) {
+            $('#hyplan-reach-status').text('Set a start airport (here or Section 1 takeoff).')
+            return
+        }
+        const aircraft = $('#hyplan-aircraft').val()
+        const mode = $('#hyplan-reach-mode').val() || 'round_trip'
+        const reserve = parseFloat($('#hyplan-reach-reserve').val()) || 0.0
+        const windKind = $('#hyplan-wind-kind').val() || 'still_air'
+        const wind = { kind: windKind }
+        if (windKind === 'constant') {
+            wind.speed_kt = parseFloat($('#hyplan-wind-speed').val()) || 0
+            wind.direction_deg = parseFloat($('#hyplan-wind-direction').val()) || 0
+        }
+
+        const concentric = budgets.length > 1
+        const url = concentric ? '/isochrone-concentric' : '/isochrone'
+        const body = {
+            aircraft: aircraft,
+            start: { airport: startIcao },
+            budget_min: budgets[0],
+            mode: mode,
+            reserve_min: reserve,
+            wind: wind,
+        }
+        if (concentric) body.budgets_min = budgets
+        // round_trip default returns to start; return_safe needs an explicit destination.
+        if (mode === 'return_safe') {
+            const ret = ($('#hyplan-return-airport').val() || '').trim() || startIcao
+            body.return_destination = { airport: ret }
+        }
+
+        $('#hyplan-reach-status').text('Computing reach…')
+        $('#hyplan-reach-compute-btn').prop('disabled', true)
+        fetch(`${SERVICE_URL}${url}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail || data.message) {
+                $('#hyplan-reach-status').text('Error: ' + getErrorMessage(data))
+                return
+            }
+            const polys = (data.features || []).filter(f => f.geometry && f.geometry.type === 'Polygon')
+            if (polys.length === 0) {
+                $('#hyplan-reach-status').text('No reachable contour (try a larger budget).')
+                return
+            }
+            hyplanDisownAndRemove(reachLayer)
+            const sortedByBudget = polys.slice().sort((a, b) =>
+                (b.properties.budget_min || 0) - (a.properties.budget_min || 0)
+            )
+            reachLayer = hyplanOwn(window.L.geoJSON(
+                { type: 'FeatureCollection', features: sortedByBudget },
+                {
+                    style: function () {
+                        return {
+                            color: '#0ea5e9',
+                            weight: 2,
+                            fillColor: '#0ea5e9',
+                            fillOpacity: 0.10,
+                        }
+                    },
+                    onEachFeature: function (feature, layer) {
+                        const b = feature.properties.budget_min
+                        layer.bindTooltip(`${b} min`, { sticky: true })
+                    },
+                }
+            )).addTo(Map_.map)
+            const labels = sortedByBudget.map(p => `${p.properties.budget_min} min`).join(', ')
+            $('#hyplan-reach-status').text(`Reach: ${labels}`)
+            const s = data.summary || {}
+            $('#hyplan-reach-summary').text(
+                `n_rays=${s.n_rays || '?'} wind=${s.wind_source_kind || '?'} mode=${s.mode || mode}`
+            )
+            $('#hyplan-reach-clear-btn').show()
+        })
+        .catch(err => {
+            $('#hyplan-reach-status').text('Error: ' + err.message)
+        })
+        .finally(() => {
+            $('#hyplan-reach-compute-btn').prop('disabled', false)
+        })
+    })
+
+    // --- Clear Reach ---
+    $('#hyplan-reach-clear-btn').on('click', function () {
+        hyplanDisownAndRemove(reachLayer)
+        reachLayer = null
+        $('#hyplan-reach-status').text('')
+        $('#hyplan-reach-summary').text('')
+        $('#hyplan-reach-clear-btn').hide()
     })
 
     // --- Compute Glint ---
