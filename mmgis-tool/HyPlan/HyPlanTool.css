@@ -180,6 +180,38 @@
 #hyplanTool .hyplan-patterns-list {
     margin-top: 4px;
 }
+#hyplanTool .hyplan-campaigns-list {
+    margin-top: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+#hyplanTool .hyplan-campaign-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border-radius: 2px;
+    font-size: 11px;
+    cursor: pointer;
+}
+#hyplanTool .hyplan-campaign-item:hover {
+    background: var(--color-h);
+}
+#hyplanTool .hyplan-campaign-item.active {
+    background: var(--color-mmgis);
+    color: white;
+}
+#hyplanTool .hyplan-campaign-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#hyplanTool .hyplan-campaign-meta {
+    font-size: 10px;
+    color: var(--color-c);
+    font-family: ui-monospace, Menlo, monospace;
+}
 #hyplanTool .hyplan-pattern-item {
     display: flex;
     align-items: center;

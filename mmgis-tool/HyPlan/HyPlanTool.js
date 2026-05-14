@@ -107,6 +107,20 @@ const markup = `
 
     <details class="hyplan-section" open>
         <summary>1. Campaign</summary>
+
+        <div style="margin-bottom:0.5em">
+            <div style="display:flex; gap:6px; align-items:center; margin-bottom:4px">
+                <span style="flex:1; font-size:11px; color:var(--color-c)">Active:</span>
+                <span id="hyplan-active-campaign" style="font-size:11px; font-family:ui-monospace, Menlo, monospace">(new)</span>
+                <button id="hyplan-new-campaign-btn" type="button" title="Start fresh; the next generate / pattern call will create a new server-side campaign.">New</button>
+            </div>
+            <details>
+                <summary style="cursor:pointer; font-size:11px; color:var(--color-c)">Switch / load campaign</summary>
+                <button id="hyplan-refresh-campaigns-btn" type="button" style="font-size:11px; padding:2px 8px">Refresh list</button>
+                <div id="hyplan-campaigns-list" class="hyplan-campaigns-list"></div>
+            </details>
+        </div>
+
         <label>Campaign Name</label>
         <input type="text" id="hyplan-campaign-name" value="Mission" />
         <label>Aircraft</label>
@@ -365,6 +379,97 @@ function interfaceWithMMGIS() {
     $('#hyplan-takeoff-time').on('input change', updateTakeoffTimeMeta)
     updateTakeoffTimeMeta()
 
+    // --- Multi-campaign switcher ---------------------------------------
+    // Fetches /campaigns to populate a list inside Section 1's
+    // "Switch / load campaign" details, and wires click-to-load,
+    // "New", and "Refresh list".  Honors design-principle #9 (state
+    // should be inspectable): the active campaign is always shown
+    // next to the New button.
+
+    function refreshActiveCampaignBadge() {
+        const shortId = campaignId ? campaignId.slice(0, 8) + '…' : '(new)'
+        $('#hyplan-active-campaign').text(shortId)
+        // Highlight the active row in the list if present.
+        $('#hyplan-campaigns-list .hyplan-campaign-item').removeClass('active')
+        $(`#hyplan-campaigns-list .hyplan-campaign-item[data-cid="${campaignId}"]`).addClass('active')
+    }
+
+    function refreshCampaignsList() {
+        const $list = $('#hyplan-campaigns-list')
+        $list.text('Loading…')
+        fetch(`${SERVICE_URL}/campaigns`)
+            .then(r => r.json()).then(trackRevision)
+            .then(data => {
+                $list.empty()
+                const campaigns = (data && data.campaigns) || []
+                if (campaigns.length === 0) {
+                    $list.append('<p class="hyplan-empty">No persisted campaigns yet.</p>')
+                    return
+                }
+                campaigns.forEach(function (c) {
+                    // Compact updated_at: drop seconds + tz suffix.
+                    const updated = (c.updated_at || '').slice(0, 16).replace('T', ' ')
+                    const row = $(
+                        `<div class="hyplan-campaign-item" data-cid="${c.campaign_id}" title="${c.campaign_id}">
+                            <span class="hyplan-campaign-name">${c.name || '(unnamed)'}</span>
+                            <span class="hyplan-campaign-meta">rev ${c.revision} · ${updated}</span>
+                        </div>`
+                    )
+                    $list.append(row)
+                })
+                refreshActiveCampaignBadge()
+            })
+            .catch(err => {
+                $list.text('Failed to load: ' + err.message)
+            })
+    }
+
+    $('#hyplan-refresh-campaigns-btn').on('click', refreshCampaignsList)
+
+    $('#hyplan-campaigns-list').on('click', '.hyplan-campaign-item', function () {
+        const cid = $(this).data('cid')
+        if (!cid || cid === campaignId) return
+        fetch(`${SERVICE_URL}/campaigns/${cid}`)
+            .then(r => r.json()).then(trackRevision)
+            .then(data => {
+                if (data.detail) return
+                campaignId = data.campaign_id
+                $('#hyplan-campaign-name').val(data.name || '')
+                displayFlightLines(data.flight_lines)
+                updateLineList(data.flight_lines)
+                renderPatternsLayer(data.patterns)
+                refreshActiveCampaignBadge()
+                updateCampaignIOEnabled()
+            })
+    })
+
+    $('#hyplan-new-campaign-btn').on('click', function () {
+        // Clear in-browser state so the next mutating call creates a
+        // fresh server-side campaign.  The map layers are torn down
+        // via hyplanDisownAndRemove so leftover flight lines / patterns
+        // don't bleed into the new campaign.
+        campaignId = null
+        lastCampaignRevision = null
+        selectedLineIds = []
+        patternsCache = []
+        patternRefsForCompute = []
+        hyplanDisownAndRemove(flightLineLayer); flightLineLayer = null
+        hyplanDisownAndRemove(planLayer); planLayer = null
+        hyplanDisownAndRemove(swathLayer); swathLayer = null
+        hyplanDisownAndRemove(glintLayer); glintLayer = null
+        hyplanDisownAndRemove(glintArcLayer); glintArcLayer = null
+        hyplanDisownAndRemove(patternsLayer); patternsLayer = null
+        $('#hyplan-line-list').empty()
+        renderPatternsList()
+        refreshActiveCampaignBadge()
+        updateCampaignIOEnabled()
+        $('#hyplan-pattern-status').text('')
+        $('#hyplan-add-line-status').text('Cleared — next generate / pattern starts a fresh campaign.')
+    })
+
+    refreshActiveCampaignBadge()
+    refreshCampaignsList()
+
     // --- Campaign Import / Export ---------------------------------------
     // Round-trip the active campaign as a single JSON bundle via the
     // /campaigns/{id}/export and /campaigns/import endpoints.  Useful
@@ -372,6 +477,7 @@ function interfaceWithMMGIS() {
 
     function updateCampaignIOEnabled() {
         $('#hyplan-export-campaign-btn').prop('disabled', !campaignId)
+        refreshActiveCampaignBadge()
     }
     updateCampaignIOEnabled()
 

@@ -140,6 +140,20 @@ concurrent overwrites._
 
   Total pytest count: **94** (was 87).
 
+- **Multi-campaign panel UI** — section 1 (Campaign) now opens with
+  the active campaign id badge, a **New** button (clears
+  in-browser state so the next generate / pattern call starts a
+  fresh server-side campaign), and a collapsible **Switch / load
+  campaign** list backed by the new `GET /campaigns` endpoint.
+  Clicking a list row fetches `/campaigns/{id}` and adopts that
+  campaign as active: `campaignId` rebound, name input refreshed,
+  flight-line + pattern map layers replaced, revision tracker
+  primed for `If-Match`.  Honors principle **#9** (state
+  inspectable) — the active campaign and the persisted list are
+  visible at all times, the active row is highlighted in the
+  list.  The previous implicit "one campaign per tab session"
+  model is gone.
+
 ## v0.3.0 — 2026-05-14
 
 _HyPlan v1.7 features the plugin doesn't expose yet — pattern movement
