@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # service.app:app` resolves the package the same way it does in dev.
 # hyplan is mounted as a volume and installed at startup by
 # entrypoint.sh.
-COPY __init__.py app.py state.py errors.py schemas.py /app/service/
+COPY __init__.py app.py state.py errors.py schemas.py serialize.py store.py /app/service/
 COPY routers /app/service/routers
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
