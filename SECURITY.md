@@ -7,7 +7,8 @@ for the latest 0.x release only.
 
 | Version  | Supported          |
 |----------|--------------------|
-| 0.1.x    | :white_check_mark: |
+| 0.2.x    | :white_check_mark: |
+| 0.1.x    | :x: (use 0.2.x)    |
 
 ## Reporting a vulnerability
 
