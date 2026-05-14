@@ -14,6 +14,7 @@ from hyplan.waypoint import Waypoint
 
 from ..errors import raise_http
 from ..schemas import (
+    ComparePlansRequest,
     ComputePlanRequest,
     ComputePlanResponse,
     OptimizeRequest,
@@ -204,3 +205,132 @@ def optimize_sequence(req: OptimizeRequest):
         lines_skipped=result.get("lines_skipped", []),
         warnings=warnings,
     )
+
+
+def _segment_props(feature: dict) -> dict:
+    """Pull the properties dict out of a plan GeoJSON Feature.
+    Returns ``{}`` for malformed features so downstream code can
+    still index into it safely."""
+    if not isinstance(feature, dict):
+        return {}
+    p = feature.get("properties")
+    return p if isinstance(p, dict) else {}
+
+
+def _delta(a: float | None, b: float | None) -> float | None:
+    """``b - a`` with ``None``-tolerance.  Returns ``None`` if either
+    side is missing."""
+    if a is None or b is None:
+        return None
+    try:
+        return float(b) - float(a)
+    except (TypeError, ValueError):
+        return None
+
+
+@router.post("/compare-plans")
+def compare_plans(req: ComparePlansRequest):
+    """Diff two computed plans segment-by-segment.
+
+    Each input is a GeoJSON FeatureCollection in the shape
+    ``/compute-plan`` returns under ``segments``.  Segments are
+    paired **by index** — the most useful comparison is "same
+    sequence, different wind / aircraft", where segments line up
+    1-to-1.  When the plans have different lengths, the extra
+    segments at the tail are reported as ``added`` (in B but not A)
+    or ``removed`` (in A but not B).
+
+    Per-segment fields in the response:
+
+    - ``status`` — ``matched`` | ``added`` | ``removed``
+    - ``segment_type``, ``segment_name`` — copied from whichever
+      side has them (B preferred for matched / added)
+    - ``delta_distance_nm``, ``delta_time_min``,
+      ``delta_start_altitude``, ``delta_end_altitude`` — ``B - A``;
+      ``None`` for added/removed
+
+    The summary aggregates the deltas over matched segments.
+    """
+    features_a = req.plan_a.get("features", []) if isinstance(req.plan_a, dict) else []
+    features_b = req.plan_b.get("features", []) if isinstance(req.plan_b, dict) else []
+    if not isinstance(features_a, list) or not isinstance(features_b, list):
+        raise HTTPException(
+            status_code=400,
+            detail="plan_a.features and plan_b.features must be lists.",
+        )
+
+    n = max(len(features_a), len(features_b))
+    diff_segments: list[dict] = []
+    total_dd = 0.0
+    total_dt = 0.0
+    matched = added = removed = 0
+
+    for i in range(n):
+        a = features_a[i] if i < len(features_a) else None
+        b = features_b[i] if i < len(features_b) else None
+        ap = _segment_props(a) if a is not None else {}
+        bp = _segment_props(b) if b is not None else {}
+
+        if a is None:
+            status = "added"
+            added += 1
+            row: dict = {
+                "index": i,
+                "status": status,
+                "segment_type": bp.get("segment_type"),
+                "segment_name": bp.get("segment_name"),
+                "b": bp,
+            }
+        elif b is None:
+            status = "removed"
+            removed += 1
+            row = {
+                "index": i,
+                "status": status,
+                "segment_type": ap.get("segment_type"),
+                "segment_name": ap.get("segment_name"),
+                "a": ap,
+            }
+        else:
+            status = "matched"
+            matched += 1
+            dd = _delta(ap.get("distance"), bp.get("distance"))
+            dt = _delta(ap.get("time_to_segment"), bp.get("time_to_segment"))
+            d_alt_start = _delta(ap.get("start_altitude"), bp.get("start_altitude"))
+            d_alt_end = _delta(ap.get("end_altitude"), bp.get("end_altitude"))
+            if dd is not None:
+                total_dd += dd
+            if dt is not None:
+                total_dt += dt
+            row = {
+                "index": i,
+                "status": status,
+                "segment_type": bp.get("segment_type") or ap.get("segment_type"),
+                "segment_name": bp.get("segment_name") or ap.get("segment_name"),
+                "delta_distance_nm": dd,
+                "delta_time_min": dt,
+                "delta_start_altitude": d_alt_start,
+                "delta_end_altitude": d_alt_end,
+                "a": ap,
+                "b": bp,
+            }
+        diff_segments.append(row)
+
+    return {
+        "label_a": req.label_a,
+        "label_b": req.label_b,
+        "summary": {
+            "matched": matched,
+            "added": added,
+            "removed": removed,
+            "segments_a": len(features_a),
+            "segments_b": len(features_b),
+            "delta_segments": len(features_b) - len(features_a),
+            # Sum-of-deltas over MATCHED segments only.  Adding the
+            # full A/B totals here would double-count for an added
+            # segment (its B-distance shows up in "added" too).
+            "delta_distance_nm": total_dd,
+            "delta_time_min": total_dt,
+        },
+        "segments": diff_segments,
+    }

@@ -75,6 +75,22 @@ class ComputePlanResponse(BaseModel):
     warnings: list[str]
 
 
+class ComparePlansRequest(BaseModel):
+    """Two plans to diff.  Each is a GeoJSON FeatureCollection in
+    the shape ``/compute-plan`` returns under ``segments`` —
+    Feature.properties carrying ``segment_type``, ``segment_name``,
+    ``distance``, ``time_to_segment``, ``start_altitude``,
+    ``end_altitude``.
+
+    Labels are optional and only used in the response for clarity
+    ("still_air" vs "gfs", etc.).
+    """
+    plan_a: dict
+    plan_b: dict
+    label_a: Optional[str] = None
+    label_b: Optional[str] = None
+
+
 # --- Optimize-sequence --------------------------------------------------
 
 class OptimizeRequest(BaseModel):

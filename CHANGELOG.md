@@ -115,6 +115,31 @@ concurrent overwrites._
 
   Total pytest count: **87** (was 77).
 
+- **`/compare-plans` endpoint** — segment-by-segment diff of two
+  computed plans.  Takes two GeoJSON FeatureCollections in the
+  shape `/compute-plan` returns under `segments`, optional
+  `label_a` / `label_b` for labelling, and returns:
+  - `summary`: matched / added / removed counts, segment-count
+    delta, and **sum-of-delta** distance (nm) and time (min)
+    across matched segments.
+  - `segments`: one row per index with `status`
+    (`matched` | `added` | `removed`), `segment_type`,
+    `segment_name`, per-field deltas
+    (`delta_distance_nm`, `delta_time_min`,
+    `delta_start_altitude`, `delta_end_altitude`), and the raw
+    `a` / `b` properties dicts.
+  - Pairing is by index — the common "same sequence, different
+    wind / aircraft" comparison.  When the plans have different
+    lengths, the extra tail segments report as `added` (in B but
+    not A) or `removed` (in A but not B).
+  - 7 new pytest cases: identical → zero delta, same shape with
+    time deltas (the "what changed when I added wind"
+    case), added / removed tail segments, empty round-trip,
+    400-on-non-list-features, end-to-end via two real
+    `/compute-plan` calls.
+
+  Total pytest count: **94** (was 87).
+
 ## v0.3.0 — 2026-05-14
 
 _HyPlan v1.7 features the plugin doesn't expose yet — pattern movement
