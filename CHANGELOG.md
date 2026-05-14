@@ -66,6 +66,55 @@ concurrent overwrites._
     guard on `/transform-lines`, `/generate-pattern`,
     `/transform-pattern`).
 
+- **SQLite-backed campaign store** replaces the v0.1–v0.3 flat-file
+  tree.  Each campaign lives in one row of one table; the row's
+  ``bundle_json`` column holds the same JSON envelope that
+  `/campaigns/{id}/export` emits, so persistence and the
+  share-a-mission feature share their encoding (see
+  `service.serialize`).  Two new env vars:
+  - `HYPLAN_CAMPAIGNS_DB` — path to the SQLite file (default:
+    `${HYPLAN_CAMPAIGNS_DIR}/campaigns.sqlite`).
+  - `HYPLAN_CAMPAIGNS_DIR` — kept for backwards compat; on startup
+    `service.store.migrate_filesystem_to_db()` imports any
+    legacy `<uuid>/campaign.json` trees that aren't already in the
+    store.  Idempotent.
+
+  Wins: **atomic writes** (UPSERT under a single transaction; no
+  more partial-on-disk-tree failure modes), **no `/tmp` fragility**
+  (point the env var at any persistent path), **single artifact**
+  to back up, ship, or mount read-only.  WAL journaling enabled
+  for concurrent reads.
+
+  Plumbing:
+  - New `service/serialize.py`: `campaign_to_bundle()` /
+    `bundle_to_campaign()` factored out of the router into a
+    shared module so both the import/export endpoints and the
+    store use the same encoding.
+  - New `service/store.py`: `init_store(path)`,
+    `save_campaign(c)` (UPSERT), `load_campaign(id)`,
+    `iter_campaigns()`, `list_campaign_meta()`,
+    `delete_campaign(id)`, `migrate_filesystem_to_db(dir)`.
+  - `service.state.persist_campaign()` and
+    `load_persisted_campaigns()` route through the store; legacy
+    flat-file write path retired.
+  - `tests/conftest.py` autouse fixture initializes a fresh
+    SQLite db per test (in `tmp_path / campaigns.sqlite`) so the
+    suite stays hermetic.
+
+  New endpoint: `GET /campaigns` — lightweight metadata list of
+  all persisted campaigns (id, name, bounds, revision,
+  updated_at).  Sets up the v0.4 multi-campaign UI.
+
+  10 new pytest cases in `tests/test_store.py`: round-trip, missing
+  → None, UPSERT, iteration, delete, migration from legacy dir +
+  idempotence, no-op when legacy dir is absent, persistence across
+  in-memory clear (simulates service restart), `/campaigns`
+  listing shape, env-var exposure.  Plus
+  `test_generate_lines_persists_campaign` rewritten to check the
+  store instead of the old on-disk tree.
+
+  Total pytest count: **87** (was 77).
+
 ## v0.3.0 — 2026-05-14
 
 _HyPlan v1.7 features the plugin doesn't expose yet — pattern movement

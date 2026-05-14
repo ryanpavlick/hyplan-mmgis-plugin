@@ -10,9 +10,20 @@ Two pieces of mutable state are important when reading the service:
   campaign so the ``/export`` endpoint can write KML / GPX without
   recomputing.
 
-Campaigns are also persisted to :envvar:`HYPLAN_CAMPAIGNS_DIR` and
-reloaded on service startup, so the in-memory state is effectively a
-working cache over the saved campaign directories.
+Campaigns are persisted to a SQLite database (one row per campaign,
+the row's ``bundle_json`` column holds the same JSON envelope that
+``/campaigns/{id}/export`` emits) and reloaded on service startup,
+so the in-memory state is effectively a working cache over the
+store.
+
+Two env vars control the persistence layer:
+
+- :envvar:`HYPLAN_CAMPAIGNS_DB` — path to the SQLite file (default:
+  ``${HYPLAN_CAMPAIGNS_DIR}/campaigns.sqlite``).
+- :envvar:`HYPLAN_CAMPAIGNS_DIR` — legacy directory tree.  On
+  startup, any campaign UUIDs found here that aren't already in the
+  store get one-shot-migrated into it.  Existing deployments
+  upgrade transparently.
 """
 
 from __future__ import annotations
@@ -27,9 +38,15 @@ import hyplan
 from hyplan.aircraft import Aircraft
 from hyplan.campaign import Campaign
 
+from . import store as _store
+
 logger = logging.getLogger("hyplan-service")
 
 CAMPAIGNS_DIR = os.environ.get("HYPLAN_CAMPAIGNS_DIR", "/tmp/hyplan-campaigns")
+CAMPAIGNS_DB = os.environ.get(
+    "HYPLAN_CAMPAIGNS_DB",
+    os.path.join(CAMPAIGNS_DIR, "campaigns.sqlite"),
+)
 
 # Active campaign objects keyed by campaign UUID plus any frontend alias
 # used when the browser creates a campaign before it knows the canonical
@@ -50,33 +67,26 @@ def register_campaign(campaign: Campaign, *extra_keys: str) -> None:
 
 
 def persist_campaign(campaign: Campaign) -> None:
-    """Save a campaign to ``HYPLAN_CAMPAIGNS_DIR/<uuid>/``."""
-    campaign_dir = os.path.join(CAMPAIGNS_DIR, campaign.campaign_id)
-    os.makedirs(campaign_dir, exist_ok=True)
-    campaign.save(campaign_dir)
-    logger.info("Persisted campaign '%s' to %s", campaign.name, campaign_dir)
+    """Persist a campaign to the SQLite store (atomic UPSERT)."""
+    _store.save_campaign(campaign)
 
 
 def load_persisted_campaigns() -> None:
-    """Load all previously saved campaigns from disk on startup."""
-    if not os.path.isdir(CAMPAIGNS_DIR):
-        return
-    for entry in os.listdir(CAMPAIGNS_DIR):
-        campaign_dir = os.path.join(CAMPAIGNS_DIR, entry)
-        campaign_json = os.path.join(campaign_dir, "campaign.json")
-        if os.path.isfile(campaign_json):
-            try:
-                campaign = Campaign.load(campaign_dir)
-                register_campaign(campaign)
-                logger.info(
-                    "Loaded persisted campaign '%s' (%s)",
-                    campaign.name,
-                    campaign.campaign_id,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to load campaign from %s: %s", campaign_dir, exc,
-                )
+    """Initialize the store, migrate any legacy on-disk campaigns,
+    and hydrate in-memory state from the store.
+
+    Called once at app startup by ``service.app``'s lifespan handler.
+    """
+    _store.init_store(CAMPAIGNS_DB)
+    migrated = _store.migrate_filesystem_to_db(CAMPAIGNS_DIR)
+    if migrated:
+        logger.info("Migrated %d legacy campaign(s) into SQLite store.", migrated)
+    for campaign in _store.iter_campaigns():
+        register_campaign(campaign)
+        logger.info(
+            "Loaded persisted campaign '%s' (%s)",
+            campaign.name, campaign.campaign_id,
+        )
 
 
 def get_or_create_campaign(

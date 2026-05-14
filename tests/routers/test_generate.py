@@ -30,12 +30,11 @@ def test_box_around_polygon_produces_lines(client, synthetic_polygon, synthetic_
     assert body["campaign_id"]
 
 
-def test_generate_lines_persists_campaign_to_disk(
-    client, synthetic_polygon, synthetic_bounds, tmp_path,
+def test_generate_lines_persists_campaign(
+    client, synthetic_polygon, synthetic_bounds,
 ):
-    """The on-disk campaign tree exists after /generate-lines runs."""
-    import os
-
+    """The campaign survives the /generate-lines call and is queryable
+    via /campaigns/{id} (i.e. it's been written to the SQLite store)."""
     resp = client.post(
         "/generate-lines",
         json={
@@ -54,7 +53,12 @@ def test_generate_lines_persists_campaign_to_disk(
         },
     )
     cid = resp.json()["campaign_id"]
-    assert os.path.isfile(tmp_path / cid / "campaign.json")
+    # In-memory state has it.
+    get_resp = client.get(f"/campaigns/{cid}")
+    assert get_resp.status_code == 200
+    # And the persisted store knows about it (lightweight summary list).
+    listing = client.get("/campaigns").json()["campaigns"]
+    assert any(c["campaign_id"] == cid for c in listing)
 
 
 def test_generate_lines_missing_sensor_is_400(

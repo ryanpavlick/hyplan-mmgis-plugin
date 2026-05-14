@@ -1,6 +1,5 @@
 """Plan export to KML / GPX + download proxy."""
 
-import os
 
 
 def _compute(client, cid):

@@ -1,16 +1,22 @@
 """Shared pytest fixtures for the service test suite.
 
 The service has process-wide state (``service.state._campaigns`` /
-``service.state._plans``) and a campaign-persistence directory pulled
-from ``HYPLAN_CAMPAIGNS_DIR`` at import time.  We isolate every test
-function by:
+``service.state._plans``) and a SQLite-backed campaign store whose
+path is pulled from ``HYPLAN_CAMPAIGNS_DB`` at import time.  We
+isolate every test function by:
 
-1. Pointing ``HYPLAN_CAMPAIGNS_DIR`` at a per-test tmp dir **before**
-   ``service.app`` is imported (session-scoped autouse fixture).
-2. Clearing ``service.state._campaigns`` / ``_plans`` between tests
-   (function-scoped autouse fixture).
-3. Patching :data:`service.state.CAMPAIGNS_DIR` to the per-test tmp
-   path so persistence writes land somewhere disposable.
+1. Pointing ``HYPLAN_CAMPAIGNS_DB`` and ``HYPLAN_CAMPAIGNS_DIR`` at
+   a session-level tmp dir **before** ``service.app`` is imported
+   (module-level side effect so it runs on conftest import).
+2. Clearing ``service.state._campaigns`` / ``_plans`` between
+   tests (function-scoped autouse fixture).
+3. Re-initializing the SQLite store at a per-test ``tmp_path`` and
+   pointing ``service.state.CAMPAIGNS_DIR`` (used by /export for
+   KML/GPX scratch files) at the same per-test path.
+
+Net effect: every test starts from an empty store with a fresh
+in-memory cache, and writes land in a disposable directory pytest
+cleans up.
 """
 
 from __future__ import annotations
@@ -20,11 +26,12 @@ import tempfile
 
 import pytest
 
-# Set the campaigns dir *before* service.app is imported.  This is a
-# module-level side effect so it runs on conftest import, ahead of
-# any test discovery that touches service modules.
+# Set the campaigns dir + db path *before* service.app is imported.
+# This is a module-level side effect so it runs on conftest import,
+# ahead of any test discovery that touches service modules.
 _SESSION_TMP = tempfile.mkdtemp(prefix="hyplan-tests-")
 os.environ["HYPLAN_CAMPAIGNS_DIR"] = _SESSION_TMP
+os.environ["HYPLAN_CAMPAIGNS_DB"] = os.path.join(_SESSION_TMP, "campaigns.sqlite")
 
 
 @pytest.fixture(autouse=True)
@@ -34,17 +41,23 @@ def isolate_state(tmp_path, monkeypatch):
     Autouse so every test starts with an empty ``_campaigns`` /
     ``_plans`` and writes to its own disposable directory.
     """
-    from service import state
+    from service import state, store
 
     state._campaigns.clear()
     state._plans.clear()
+
     monkeypatch.setattr(state, "CAMPAIGNS_DIR", str(tmp_path))
-    # Some submodules grabbed CAMPAIGNS_DIR by reference at import
-    # time (e.g. service.routers.export uses `from ..state import
-    # CAMPAIGNS_DIR`).  Patch those names too so /export and
-    # /download don't write to the stale session tmp dir.
+    # ``service.routers.export`` grabbed CAMPAIGNS_DIR by reference at
+    # import time; patch the alias so /export and /download write to
+    # the per-test path, not the session tmp dir.
     from service.routers import export as _export_mod
     monkeypatch.setattr(_export_mod, "CAMPAIGNS_DIR", str(tmp_path))
+
+    # Fresh SQLite db per test.  init_store closes any prior
+    # connection automatically.
+    db_path = str(tmp_path / "campaigns.sqlite")
+    monkeypatch.setattr(state, "CAMPAIGNS_DB", db_path)
+    store.init_store(db_path)
 
 
 @pytest.fixture
