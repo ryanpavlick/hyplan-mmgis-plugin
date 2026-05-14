@@ -83,6 +83,12 @@ yarn-error.log*
 /tmp-campaigns/
 dev/.campaigns/
 
+# Jekyll docs site (built locally via bundle exec jekyll serve)
+docs/_site/
+docs/.jekyll-cache/
+docs/.sass-cache/
+docs/vendor/
+
 # Claude Code workspace
 .claude/
 plans/

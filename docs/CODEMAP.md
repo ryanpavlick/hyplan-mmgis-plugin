@@ -1,4 +1,7 @@
-# Code Map
+---
+title: Code Map
+nav_order: 40
+---
 
 This document is for contributors who want to understand how the
 `hyplan-mmgis-plugin` codebase is laid out before changing it.

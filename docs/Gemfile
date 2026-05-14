@@ -1,0 +1,23 @@
+# Local-serve Gemfile for the docs site.
+#
+# Optional — the published site is built by .github/workflows/docs.yml
+# in CI.  This Gemfile lets a contributor preview changes before
+# pushing:
+#
+#     cd docs
+#     bundle install
+#     bundle exec jekyll serve
+#
+# Browse the local preview at http://localhost:4000/hyplan-mmgis-plugin/
+# (note the baseurl prefix).
+
+source "https://rubygems.org"
+
+gem "jekyll", "~> 4.3"
+gem "just-the-docs", "~> 0.10"
+
+group :jekyll_plugins do
+  gem "jekyll-remote-theme"
+  gem "jekyll-seo-tag"
+  gem "jekyll-sitemap"
+end

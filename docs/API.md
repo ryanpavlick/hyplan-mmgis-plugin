@@ -1,4 +1,7 @@
-# Service API
+---
+title: Service API
+nav_order: 30
+---
 
 This file summarizes the FastAPI surface exposed by
 `hyplan-mmgis-plugin/service/app.py`.

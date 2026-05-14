@@ -1,4 +1,7 @@
-# Use HyPlan in MMGIS in 10 minutes
+---
+title: Walkthrough — Use HyPlan in MMGIS in 10 minutes
+nav_order: 20
+---
 
 This walkthrough takes you from a clean clone of this repo to drawing
 flight lines on an MMGIS map.  It assumes:
@@ -152,50 +155,50 @@ deployments use `AUTH=local` and create an admin via
 
 ## 9. Use the plugin (~2 min)
 
-Open
-[http://localhost:8889/?mission=<your-mission-name>](http://localhost:8889/).
-Click the **airplane** icon in the toolbar — the HyPlan panel opens.
+Open `http://localhost:8889/?mission=<your-mission-name>` (replace
+the placeholder with your mission name).  Click the **airplane**
+icon in the toolbar — the HyPlan panel opens.
 
-**Section 1 — Campaign**
+### Section 1 — Campaign
 
 - Name: anything.
 - Aircraft: `NASA_GV` (or any from the dropdown).
 - Sensor: `AVIRIS-NG`.
 - Takeoff / Return: `KSBP` (or your nearest airport).
 
-**Section 2 — Generate flight lines**
+### Section 2 — Generate flight lines
 
 - Use MMGIS's **Draw** tool to draw a polygon over land or water.
 - Back in HyPlan: set altitude (e.g. 7000 m), click
   **Generate Flight Lines**.
 - A box of parallel lines renders on the map.
 
-**Section 2c — Try a pattern**
+### Section 2c — Try a pattern
 
 - Pattern: `racetrack`.
 - Click **Set Center on Map**, then click anywhere on the map.
 - Click **Generate Pattern**.
 
-**Section 2e — Move the pattern (v0.3 feature)**
+### Section 2e — Move the pattern (v0.3 feature)
 
 - Pattern: pick the racetrack you just made.
 - Operation: `Translate (m N/E)`.
 - North: `5000`, East: `0`. Click **Apply**.
 - The pattern shifts 5 km north on the map.
 
-**Section 4 — Compute Plan**
+### Section 4 — Compute Plan
 
 - Select two or three flight lines (Shift+drag a box, or click in
   the line list).
 - Click **Compute Plan**.  The routed plan renders, with a summary
   (segments, distance, time) below.
 
-**Section 4b — Show Swaths (Coverage % readout, v0.2 feature)**
+### Section 4b — Show Swaths (Coverage % readout, v0.2 feature)
 
 - Click **Generate Swaths**.  The status line includes
   `Coverage: XX.X%` measured against your drawn polygon.
 
-**Section 6 — Export**
+### Section 6 — Export
 
 - Click **Export KML + GPX**.  Download links appear below.
 

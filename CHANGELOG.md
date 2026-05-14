@@ -57,6 +57,16 @@ new users._
   exercise of the panel that hits the v0.3 features (Move Pattern,
   Coverage % readout).  Linked from `README.md` and `AGENTS.md`.
 
+- **Documentation site at
+  <https://ryanpavlick.github.io/hyplan-mmgis-plugin>**, built with
+  [Just the Docs](https://just-the-docs.com).  Auto-deploys on push
+  to `main` via `.github/workflows/docs.yml`.  Pages: Home
+  (architecture + status), Walkthrough, Service API, Code Map.  Front-
+  matter `nav_order` keys keep the sidebar in workflow order
+  (Walkthrough first for new users, API + Code Map for contributors).
+  Local preview via `cd docs && bundle exec jekyll serve` against
+  the committed `Gemfile`.
+
 ## v0.2.0 — 2026-05-13
 
 _DevEx + tests release.  Lays the groundwork for landing larger feature

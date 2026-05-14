@@ -1,0 +1,69 @@
+name: Deploy Documentation
+
+# Builds the Just-the-Docs site under docs/ and deploys it to
+# GitHub Pages.  Triggers on pushes to main and via manual dispatch.
+#
+# Pages source: "GitHub Actions" (Settings → Pages → Source).  No
+# gh-pages branch involved — the actions/deploy-pages step uploads
+# the built site as a Pages artifact.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Don't cancel an in-progress deploy on a new push; let it finish so
+# the published site doesn't briefly diverge from main.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: docs
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Build site
+        env:
+          JEKYLL_ENV: production
+        working-directory: docs
+        run: |
+          bundle exec jekyll build \
+            --baseurl "${{ steps.pages.outputs.base_path }}" \
+            --destination _site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
