@@ -14,6 +14,24 @@ waypoint placement (`Waypoint.relative_to`), surfaced through the
 service and the MMGIS panel.  Plus a 10-minute walkthrough doc for
 new users._
 
+### Added
+
+- **`/transform-pattern` endpoint** wrapping HyPlan's whole-pattern
+  movement DSL.  Three operations, each preserving the pattern_id so
+  any compute sequences referencing it keep working:
+  - `translate` — geodesic offset by `north_m` / `east_m`
+  - `move_to` — re-anchor at `latitude` / `longitude`
+  - `rotate` — rotate by `angle_deg` about an optional
+    `(around_lat, around_lon)` pivot (default: pattern center)
+
+  Contained flight lines receive fresh `line_id`s on each transform.
+  Five pytest cases cover the happy paths plus 400/404 error paths.
+
+- **Move Pattern panel section (2e)** in the MMGIS tool — picks a
+  pattern from the campaign, picks an operation, and applies it
+  in place.  The pattern selector mirrors the existing
+  `patternsCache` and re-renders whenever the patterns list changes.
+
 ## v0.2.0 — 2026-05-13
 
 _DevEx + tests release.  Lays the groundwork for landing larger feature

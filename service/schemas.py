@@ -190,6 +190,16 @@ class ReplacePatternRequest(BaseModel):
     overrides: dict = Field(default_factory=dict)
 
 
+class TransformPatternRequest(BaseModel):
+    campaign_id: str
+    pattern_id: str
+    operation: str  # "translate" | "move_to" | "rotate"
+    params: dict = Field(default_factory=dict)
+    # translate: {north_m: float, east_m: float}
+    # move_to:   {latitude: float, longitude: float}
+    # rotate:    {angle_deg: float, around_lat?: float, around_lon?: float}
+
+
 # --- Analysis overlays --------------------------------------------------
 
 class SwathRequest(BaseModel):

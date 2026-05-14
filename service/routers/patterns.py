@@ -1,10 +1,11 @@
-"""Pattern generation, regeneration, listing, and deletion.
+"""Pattern generation, regeneration, transformation, listing, deletion.
 
 A HyPlan :class:`Pattern` is a first-class object on the campaign that
 owns a set of flight lines and/or waypoints.  Patterns are referenced
 from compute sequences, regenerated in place with parameter overrides,
-and have specialized rendering on the frontend (e.g. the colored swath
-preview for ``glint_arc``).
+moved as a whole via translate / move_to / rotate, and have
+specialized rendering on the frontend (e.g. the colored swath preview
+for ``glint_arc``).
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from ..schemas import (
     DeletePatternRequest,
     PatternRequest,
     ReplacePatternRequest,
+    TransformPatternRequest,
 )
 from ..state import get_campaign, get_or_create_campaign, make_aircraft, persist_campaign
 
@@ -307,6 +309,63 @@ def replace_pattern(req: ReplacePatternRequest):
         new_pattern = old.regenerate(**req.overrides)
     except Exception as exc:
         raise_http("replace-pattern", exc)
+
+    campaign.replace_pattern(req.pattern_id, new_pattern)
+    persist_campaign(campaign)
+    return _pattern_response_payload(campaign, new_pattern)
+
+
+@router.post("/transform-pattern")
+def transform_pattern(req: TransformPatternRequest):
+    """Move a whole pattern in place via HyPlan's ``Pattern`` movement DSL.
+
+    Three operations, each preserving the pattern_id:
+
+    - ``translate`` — geodesic offset by ``north_m``, ``east_m``
+    - ``move_to``   — re-anchor at ``latitude`` / ``longitude``
+    - ``rotate``    — rotate by ``angle_deg`` about an optional
+                       ``(around_lat, around_lon)`` pivot (defaults to
+                       the pattern's center)
+
+    Contained flight lines receive fresh ``line_id``\\ s.  The
+    ``pattern_id`` is preserved so any compute sequences referencing it
+    keep working.
+    """
+    campaign = get_campaign(req.campaign_id)
+    try:
+        old = campaign.get_pattern(req.pattern_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    op = req.operation
+    p = req.params
+    try:
+        if op == "translate":
+            north = float(p.get("north_m", 0)) * ureg.meter
+            east = float(p.get("east_m", 0)) * ureg.meter
+            new_pattern = old.translate(north, east)
+        elif op == "move_to":
+            if "latitude" not in p or "longitude" not in p:
+                raise HTTPException(
+                    status_code=400,
+                    detail="move_to requires 'latitude' and 'longitude' in params.",
+                )
+            new_pattern = old.move_to(float(p["latitude"]), float(p["longitude"]))
+        elif op == "rotate":
+            angle = float(p.get("angle_deg", 0))
+            around = None
+            if "around_lat" in p and "around_lon" in p:
+                around = (float(p["around_lat"]), float(p["around_lon"]))
+            new_pattern = old.rotate(angle, around=around)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown operation: '{op}'.  Expected translate, move_to, or rotate.",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise_http("transform-pattern", exc)
 
     campaign.replace_pattern(req.pattern_id, new_pattern)
     persist_campaign(campaign)

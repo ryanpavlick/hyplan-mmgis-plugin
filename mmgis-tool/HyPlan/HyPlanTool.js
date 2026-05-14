@@ -170,6 +170,29 @@ const markup = `
     </div>
 
     <div class="hyplan-section">
+        <h3>2e. Move Pattern</h3>
+        <p style="font-size:11px; color:var(--color-c)">Move a whole pattern in place: shift it N/E, re-anchor at a lat/lon, or rotate it about its center. The pattern keeps its identity and any compute-sequence references stay valid.</p>
+        <label>Pattern</label>
+        <select id="hyplan-move-pattern-select"></select>
+        <label>Operation</label>
+        <select id="hyplan-move-pattern-op">
+            <option value="translate">Translate (m N/E)</option>
+            <option value="move_to">Move to (lat/lon)</option>
+            <option value="rotate">Rotate (deg, about center)</option>
+        </select>
+        <div id="hyplan-move-pattern-params">
+            <label id="hyplan-move-pattern-label-1">North (m)</label>
+            <input type="number" id="hyplan-move-pattern-val-1" value="0" />
+            <div id="hyplan-move-pattern-val-2-wrap">
+                <label id="hyplan-move-pattern-label-2">East (m)</label>
+                <input type="number" id="hyplan-move-pattern-val-2" value="0" />
+            </div>
+        </div>
+        <button id="hyplan-move-pattern-btn" disabled>Apply</button>
+        <div id="hyplan-move-pattern-status" class="hyplan-status"></div>
+    </div>
+
+    <div class="hyplan-section">
         <h3>3. Select & Order Lines</h3>
         <button id="hyplan-select-all-btn">Select All</button>
         <button id="hyplan-clear-selection-btn">Clear</button>
@@ -1193,6 +1216,85 @@ function interfaceWithMMGIS() {
         }
     })
 
+    // --- Move Pattern (Section 2e) --------------------------------------
+    // Wraps the /transform-pattern endpoint: translate / move_to / rotate
+    // a whole pattern in place.  The pattern selector is refreshed from
+    // patternsCache by renderMovePatternSelect() whenever the patterns
+    // list changes.
+
+    const MOVE_PATTERN_LABELS = {
+        translate: ['North (m)', 'East (m)'],
+        move_to:   ['Latitude',  'Longitude'],
+        rotate:    ['Angle (deg)', null],   // single-value op
+    }
+
+    function updateMovePatternForm() {
+        const op = $('#hyplan-move-pattern-op').val()
+        const [l1, l2] = MOVE_PATTERN_LABELS[op] || ['', null]
+        $('#hyplan-move-pattern-label-1').text(l1)
+        if (l2 === null) {
+            $('#hyplan-move-pattern-val-2-wrap').hide()
+        } else {
+            $('#hyplan-move-pattern-label-2').text(l2)
+            $('#hyplan-move-pattern-val-2-wrap').show()
+        }
+    }
+    updateMovePatternForm()
+
+    $('#hyplan-move-pattern-op').on('change', updateMovePatternForm)
+
+    $('#hyplan-move-pattern-btn').on('click', function () {
+        const pid = $('#hyplan-move-pattern-select').val()
+        if (!pid || !campaignId) return
+        const op = $('#hyplan-move-pattern-op').val()
+        const v1 = parseFloat($('#hyplan-move-pattern-val-1').val()) || 0
+        const v2 = parseFloat($('#hyplan-move-pattern-val-2').val()) || 0
+        let params
+        if (op === 'translate')       params = { north_m: v1, east_m: v2 }
+        else if (op === 'move_to')    params = { latitude: v1, longitude: v2 }
+        else if (op === 'rotate')     params = { angle_deg: v1 }
+        else return
+        $('#hyplan-move-pattern-status').text('Applying...')
+        $('#hyplan-move-pattern-btn').prop('disabled', true)
+        fetch(`${SERVICE_URL}/transform-pattern`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                campaign_id: campaignId,
+                pattern_id: pid,
+                operation: op,
+                params: params,
+            }),
+        })
+            .then(r => r.json())
+            .then(data => {
+                if (data.detail) {
+                    $('#hyplan-move-pattern-status').text('Failed: ' + getErrorMessage(data))
+                    return
+                }
+                displayFlightLines(data.flight_lines)
+                updateLineList(data.flight_lines)
+                renderPatternsLayer(data.patterns)
+                // Update the cache entry's params so the next op runs
+                // against current state.
+                const idx = patternsCache.findIndex(p => p.pattern_id === pid)
+                if (idx >= 0) patternsCache[idx] = {
+                    pattern_id: data.pattern_id,
+                    kind: data.pattern_kind,
+                    name: data.pattern_name,
+                    is_line_based: data.is_line_based,
+                    params: data.pattern_params,
+                }
+                $('#hyplan-move-pattern-status').text(`Applied ${op} to ${data.pattern_name}.`)
+            })
+            .catch(err => {
+                $('#hyplan-move-pattern-status').text('Error: ' + err.message)
+            })
+            .finally(() => {
+                $('#hyplan-move-pattern-btn').prop('disabled', false)
+            })
+    })
+
     function onPatternCenterClick(e) {
         patternCenter = e.latlng
         Map_.map.off('click', onPatternCenterClick)
@@ -1725,6 +1827,7 @@ function renderPatternsList() {
     $list.empty()
     if (patternsCache.length === 0) {
         $list.append('<p class="hyplan-empty">No patterns in this campaign.</p>')
+        renderMovePatternSelect()
         return
     }
     patternsCache.forEach(function (pat) {
@@ -1741,6 +1844,26 @@ function renderPatternsList() {
         )
         $list.append(row)
     })
+    renderMovePatternSelect()
+}
+
+function renderMovePatternSelect() {
+    // Mirror patternsCache into the 2e move-pattern dropdown.
+    const $sel = $('#hyplan-move-pattern-select')
+    const prev = $sel.val()
+    $sel.empty()
+    if (patternsCache.length === 0) {
+        $sel.append('<option value="">(no patterns)</option>')
+        $('#hyplan-move-pattern-btn').prop('disabled', true)
+        return
+    }
+    patternsCache.forEach(function (pat) {
+        $sel.append(`<option value="${pat.pattern_id}">${pat.name} (${pat.kind})</option>`)
+    })
+    if (prev && patternsCache.find(p => p.pattern_id === prev)) {
+        $sel.val(prev)
+    }
+    $('#hyplan-move-pattern-btn').prop('disabled', false)
 }
 
 function deletePattern(patternId) {

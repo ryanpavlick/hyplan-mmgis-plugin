@@ -131,6 +131,111 @@ def test_delete_pattern_removes_from_campaign(client, synthetic_bounds):
     assert not any(p["pattern_id"] == pid for p in listing_after["patterns"])
 
 
+def _gen_racetrack(client, synthetic_bounds, cid="tx-rt"):
+    """Helper: generate a racetrack pattern and return (campaign_id,
+    pattern_id, original center) for transform tests."""
+    body = client.post(
+        "/generate-pattern",
+        json={
+            "campaign_id": cid,
+            "campaign_bounds": synthetic_bounds,
+            "pattern": "racetrack",
+            "center_lat": 35.25,
+            "center_lon": -120.0,
+            "heading": 90,
+            "altitude_msl_m": 5000,
+            "params": {"leg_length_m": 8000, "n_legs": 2},
+        },
+    ).json()
+    return body["campaign_id"], body["pattern_id"], (35.25, -120.0)
+
+
+def test_transform_pattern_translate_north(client, synthetic_bounds):
+    """Translating north by 5 km moves the stored center_lat north."""
+    cid, pid, (lat0, lon0) = _gen_racetrack(client, synthetic_bounds, "tx-tr")
+    resp = client.post(
+        "/transform-pattern",
+        json={
+            "campaign_id": cid,
+            "pattern_id": pid,
+            "operation": "translate",
+            "params": {"north_m": 5000, "east_m": 0},
+        },
+    )
+    assert resp.status_code == 200, resp.json()
+    body = resp.json()
+    assert body["pattern_id"] == pid   # id preserved
+    new_lat = body["pattern_params"]["center_lat"]
+    assert new_lat > lat0              # moved north
+    # 5 km ~ 0.045° latitude — assert order of magnitude
+    assert 0.02 < (new_lat - lat0) < 0.08
+
+
+def test_transform_pattern_move_to_changes_center(client, synthetic_bounds):
+    cid, pid, _ = _gen_racetrack(client, synthetic_bounds, "tx-mv")
+    new_lat, new_lon = 36.0, -119.5
+    resp = client.post(
+        "/transform-pattern",
+        json={
+            "campaign_id": cid,
+            "pattern_id": pid,
+            "operation": "move_to",
+            "params": {"latitude": new_lat, "longitude": new_lon},
+        },
+    )
+    assert resp.status_code == 200, resp.json()
+    p = resp.json()["pattern_params"]
+    assert abs(p["center_lat"] - new_lat) < 1e-6
+    assert abs(p["center_lon"] - new_lon) < 1e-6
+
+
+def test_transform_pattern_rotate_changes_heading(client, synthetic_bounds):
+    cid, pid, _ = _gen_racetrack(client, synthetic_bounds, "tx-ro")
+    resp = client.post(
+        "/transform-pattern",
+        json={
+            "campaign_id": cid,
+            "pattern_id": pid,
+            "operation": "rotate",
+            "params": {"angle_deg": 30},
+        },
+    )
+    assert resp.status_code == 200, resp.json()
+    p = resp.json()["pattern_params"]
+    # Original heading was 90; +30° rotation around the center should
+    # shift it to ~120 (modulo HyPlan's heading-normalization rules,
+    # which keep it in [0, 360)).
+    assert abs(p["heading"] - 120) < 1.0
+
+
+def test_transform_pattern_unknown_operation_is_400(client, synthetic_bounds):
+    cid, pid, _ = _gen_racetrack(client, synthetic_bounds, "tx-un")
+    resp = client.post(
+        "/transform-pattern",
+        json={
+            "campaign_id": cid,
+            "pattern_id": pid,
+            "operation": "warp",
+            "params": {},
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_transform_pattern_unknown_pattern_id_is_404(client, synthetic_bounds):
+    cid, _, _ = _gen_racetrack(client, synthetic_bounds, "tx-na")
+    resp = client.post(
+        "/transform-pattern",
+        json={
+            "campaign_id": cid,
+            "pattern_id": "pattern_999",
+            "operation": "translate",
+            "params": {"north_m": 1000, "east_m": 0},
+        },
+    )
+    assert resp.status_code == 404
+
+
 def test_unknown_pattern_kind_is_400(client, synthetic_bounds):
     resp = client.post(
         "/generate-pattern",
