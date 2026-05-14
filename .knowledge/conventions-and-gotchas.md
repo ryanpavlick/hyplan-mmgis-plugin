@@ -99,6 +99,13 @@ without any rebuild:
 ln -s "$PWD/mmgis-tool/HyPlan" /path/to/MMGIS/src/essence/Tools/HyPlan
 ```
 
+⚠️ **Stock MMGIS skips symlinked tool dirs.**  Two MMGIS-side patches
+are needed for this loop to actually work — see
+[knowledge-notes.md → "Symlinking the tool into MMGIS needs two
+MMGIS-side patches"](knowledge-notes.md).  Without them, the tool
+silently fails to register and webpack fails to resolve
+`../../Basics/...` imports.
+
 Reserve `cp -r` + `npm run build` for one-shot installs into an
 MMGIS instance you aren't actively iterating on.
 

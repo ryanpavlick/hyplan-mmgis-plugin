@@ -4,6 +4,75 @@ Lessons learned from past sessions - gotchas not obvious from reading
 the code.  Add to this file when something surprises you on a clean
 clone.
 
+## Symlinking the tool into MMGIS needs two MMGIS-side patches
+
+The "edit in this repo, symlink into MMGIS, get HMR via
+`npm start`" loop that AGENTS.md documents does **not** work against
+stock MMGIS as of NASA-AMMOS/MMGIS development branch v4.3.x.  Two
+patches are required on the MMGIS side; both are small,
+forward-compatible, and worth proposing upstream.
+
+### 1. `MMGIS/API/updateTools.js` — follow symlinked tool directories
+
+`updateTools()` runs on every `npm start` and `npm run build`, scans
+`src/essence/Tools/`, and writes `src/pre/tools.js` (the static tool
+registry: `toolConfigs`, `toolModules`).  It checks each entry with
+`Dirent.isDirectory()`, which returns **false** for symlinks pointing
+at directories — so a symlinked tool gets silently skipped.  Symptom:
+the tool's icon doesn't appear in the toolbar at all, and (if the
+icon was hand-added to the mission config) clicking it does nothing
+because the tool module isn't in `toolModules`.
+
+Patch:
+
+```js
+// API/updateTools.js, in the main Tools loop (also applies to the
+// Plugin-Tools / Private-Tools / Components loops further down)
+isDir = items[i].isDirectory();
+if (!isDir && items[i].isSymbolicLink()) {
+    try {
+        isDir = fs.statSync(path.join(toolsPath, items[i].name)).isDirectory();
+    } catch (_) { /* dangling symlink; treat as non-dir */ }
+}
+```
+
+### 2. `MMGIS/configuration/webpack.config.js` — `resolve.symlinks: false`
+
+Webpack's default `resolve.symlinks: true` canonicalizes a symlinked
+file to its real path **before** resolving relative imports.  For a
+symlinked tool, that means `../../Basics/Map_/Map_` inside the tool's
+JS resolves against the tool's **real** location (in this plugin
+repo) — not against `MMGIS/src/essence/Tools/HyPlan/`.  Symptom: hot
+reload triggers a fresh webpack compile that **fails** with "module
+not found" for every `Basics/...` import the tool makes.
+
+Patch:
+
+```js
+// configuration/webpack.config.js, inside the resolve: {} block
+resolve: {
+    symlinks: false,   // <-- add this
+    modules: [...],
+    ...
+}
+```
+
+### Verification
+
+After both patches, restarting `npm start`:
+
+- `MMGIS/src/pre/tools.js` regenerates and contains the symlinked tool
+  in both `toolConfigs` and `toolModules`.
+- Webpack compiles without "module not found" for `../../Basics/...`
+  imports.
+- The tool's icon appears in the toolbar and clicks open its panel.
+- Edits to `mmgis-tool/HyPlan/HyPlanTool.js` (or `helpers.js`) in this
+  repo hot-reload in the browser without restarting MMGIS.
+
+The alternative (no patches) is to **copy** the tool directory into
+MMGIS instead of symlinking.  Works out of the box but kills HMR — you
+re-copy + reload on every edit.
+
 ## Don't check HyPlan out into `./hyplan/` — it shadows the install
 
 In CI we install HyPlan from a sibling checkout: `pip install -e

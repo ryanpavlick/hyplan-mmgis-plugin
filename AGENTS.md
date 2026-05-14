@@ -97,8 +97,16 @@ npm start          # dev mode; browse the map at http://localhost:8889
 ```
 
 Webpack-dev-server picks up file changes via its watcher; no
-`npm run build` round-trip is needed during development.  Use the
-copy + build dance only for a one-shot production install:
+`npm run build` round-trip is needed during development.
+
+⚠️ **Stock MMGIS needs two patches for the symlink loop to work.**
+Without them the tool silently fails to register
+(`Dirent.isDirectory()` returns `false` for symlinks) and webpack
+fails to resolve `../../Basics/...` imports.  See
+[.knowledge/knowledge-notes.md](./.knowledge/knowledge-notes.md) →
+"Symlinking the tool into MMGIS needs two MMGIS-side patches".
+
+Reserve the copy + build dance for a one-shot production install:
 
 ```bash
 cp -r mmgis-tool/HyPlan /path/to/MMGIS/src/essence/Tools/HyPlan
@@ -107,7 +115,7 @@ cd /path/to/MMGIS && npm run build
 
 ## Architecture at a Glance
 
-```
+```text
 MMGIS map + Draw tool
         |
         v
@@ -128,7 +136,7 @@ HyPlan library (Campaign, Pattern, compute_flight_plan, GlintArc, ...)
 
 ## Repository Layout
 
-```
+```text
 hyplan-mmgis-plugin/
 |-- AGENTS.md                       this file
 |-- .knowledge/                     agent-optimized context
@@ -186,15 +194,15 @@ hyplan-mmgis-plugin/
 Agent-optimized lessons live in **[.knowledge/](./.knowledge/)**.
 Full docs in [docs/](docs/).
 
-| File                                          | What's there                                      |
-| --------------------------------------------- | ------------------------------------------------- |
+| File                                                                  | What's there                                       |
+| --------------------------------------------------------------------- | -------------------------------------------------- |
 | [conventions-and-gotchas.md](./.knowledge/conventions-and-gotchas.md) | Naming, file placement, lint contracts, MMGIS-isms |
 | [knowledge-notes.md](./.knowledge/knowledge-notes.md)                 | Non-obvious lessons from past sessions             |
 
 ## References
 
-- **HyPlan core library**: https://github.com/ryanpavlick/hyplan
-- **MMGIS**: https://github.com/NASA-AMMOS/MMGIS
+- **HyPlan core library**: <https://github.com/ryanpavlick/hyplan>
+- **MMGIS**: <https://github.com/NASA-AMMOS/MMGIS>
 - **CHANGELOG**: [CHANGELOG.md](CHANGELOG.md)
 - **CONTRIBUTING** (human-facing): [CONTRIBUTING.md](CONTRIBUTING.md)
 - **Roadmap (local-only)**: `plans/roadmap.md` (gitignored)
