@@ -1,6 +1,7 @@
 ---
 title: Walkthrough — Use HyPlan in MMGIS in 10 minutes
 nav_order: 20
+permalink: /walkthrough/
 ---
 
 This walkthrough takes you from a clean clone of this repo to drawing

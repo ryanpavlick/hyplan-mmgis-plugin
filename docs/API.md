@@ -1,6 +1,7 @@
 ---
 title: Service API
 nav_order: 30
+permalink: /api/
 ---
 
 This file summarizes the FastAPI surface exposed by
