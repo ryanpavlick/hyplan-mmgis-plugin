@@ -321,9 +321,11 @@ const markup = `
 
     <details class="hyplan-section">
         <summary>4d. Reach (Isochrone)</summary>
-        <p style="font-size:11px; color:var(--color-c)">Wind-aware reach contour around a start point.  Aircraft / wind come from Section 1.  Start defaults to the takeoff airport.</p>
+        <p style="font-size:11px; color:var(--color-c)">Wind-aware reach contour around a start point.  Aircraft / wind come from Section 1.  Start defaults to the takeoff airport; start time defaults to Section 1 takeoff time (or now).</p>
         <label>Start airport (ICAO, blank = takeoff)</label>
         <input type="text" id="hyplan-reach-start-airport" value="" placeholder="e.g. KSBP" />
+        <label>Return airport (ICAO, blank = start; used in return_safe)</label>
+        <input type="text" id="hyplan-reach-return-airport" value="" placeholder="e.g. KLAX" />
         <label>Budgets (minutes, comma-separated for concentric)</label>
         <input type="text" id="hyplan-reach-budgets" value="120" placeholder="60,120,180" />
         <label>Mode</label>
@@ -332,9 +334,25 @@ const markup = `
             <option value="one_way">One way</option>
             <option value="return_safe">Return safe</option>
         </select>
+        <label>Cruise altitude (m, blank = start altitude)</label>
+        <input type="number" id="hyplan-reach-cruise-alt" value="" step="100" placeholder="e.g. 3000" />
+        <label>On-station time (minutes)</label>
+        <input type="number" id="hyplan-reach-onstation" value="0" min="0" step="1" />
         <label>Reserve (minutes)</label>
         <input type="number" id="hyplan-reach-reserve" value="0" min="0" step="1" />
-        <button id="hyplan-reach-compute-btn">Compute Reach</button>
+        <label>Start time (blank = Section 1 takeoff or now)</label>
+        <input type="datetime-local" id="hyplan-reach-start-time" value="" />
+        <details style="margin-top:6px">
+            <summary style="font-size:11px; padding:2px 0; cursor:pointer">Refuel (optional)</summary>
+            <p style="font-size:11px; color:var(--color-c)">When refuel airports are set, switches to /isochrone-refuel.  Per-cycle "budgets" become the sortie endurance; flight-day budget caps total wall-clock.  Concentric budgets are not supported with refuel.</p>
+            <label>Refuel airports (comma-separated ICAOs)</label>
+            <input type="text" id="hyplan-reach-refuel-airports" value="" placeholder="e.g. KLAS, KPHX" />
+            <label>Flight-day budget (minutes)</label>
+            <input type="number" id="hyplan-reach-day-budget" value="" min="0" step="1" placeholder="e.g. 600" />
+            <label>Refuel time per stop (minutes)</label>
+            <input type="number" id="hyplan-reach-refuel-time" value="60" min="0" step="1" />
+        </details>
+        <button id="hyplan-reach-compute-btn" style="margin-top:6px">Compute Reach</button>
         <button id="hyplan-reach-clear-btn" style="display:none">Clear</button>
         <div id="hyplan-reach-status" class="hyplan-status"></div>
         <div id="hyplan-reach-summary" class="hyplan-meta"></div>
@@ -389,6 +407,10 @@ function interfaceWithMMGIS() {
     toolsContainer.css('background', 'var(--color-k)')
     toolsContainer.empty()
     toolsContainer.html('<div style="height: 100%">' + markup + '</div>')
+
+    // Build marker — bump when the markup or handlers change so you
+    // can confirm at a glance which build the browser is running.
+    console.log('[HyPlan] tool panel built — build 2026-05-14 v0.4#6b (reach + full params)')
 
     // Wind kind toggle
     $('#hyplan-wind-kind').on('change', function () {
@@ -1129,28 +1151,75 @@ function interfaceWithMMGIS() {
         const aircraft = $('#hyplan-aircraft').val()
         const mode = $('#hyplan-reach-mode').val() || 'round_trip'
         const reserve = parseFloat($('#hyplan-reach-reserve').val()) || 0.0
+        const onStation = parseFloat($('#hyplan-reach-onstation').val()) || 0.0
+        const cruiseAltRaw = $('#hyplan-reach-cruise-alt').val()
+        const cruiseAlt = cruiseAltRaw === '' ? null : parseFloat(cruiseAltRaw)
         const windKind = $('#hyplan-wind-kind').val() || 'still_air'
         const wind = { kind: windKind }
         if (windKind === 'constant') {
             wind.speed_kt = parseFloat($('#hyplan-wind-speed').val()) || 0
             wind.direction_deg = parseFloat($('#hyplan-wind-direction').val()) || 0
         }
+        // Start time: explicit field wins; otherwise inherit Section 1 takeoff.
+        let startTimeIso = null
+        const reachTimeVal = $('#hyplan-reach-start-time').val()
+        if (reachTimeVal) {
+            // datetime-local is naive local — convert to UTC ISO same as Section 1.
+            startTimeIso = parseLocalDateTimeToUtcIso(reachTimeVal)
+        } else if (typeof getTakeoffTimeUtcIso === 'function') {
+            startTimeIso = getTakeoffTimeUtcIso() || null
+        }
+
+        // Refuel mode kicks in when the user populates refuel airports + flight-day budget.
+        const refuelStr = ($('#hyplan-reach-refuel-airports').val() || '').trim()
+        const refuelAirports = refuelStr
+            ? refuelStr.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+            : []
+        const dayBudgetRaw = $('#hyplan-reach-day-budget').val()
+        const dayBudget = dayBudgetRaw === '' ? null : parseFloat(dayBudgetRaw)
+        const refuelMode = refuelAirports.length > 0
+        if (refuelMode && (dayBudget == null || !isFinite(dayBudget) || dayBudget <= 0)) {
+            $('#hyplan-reach-status').text('Refuel mode needs a flight-day budget (minutes).')
+            return
+        }
+        if (refuelMode && budgets.length > 1) {
+            $('#hyplan-reach-status').text('Refuel mode does not support concentric budgets — use a single sortie budget.')
+            return
+        }
 
         const concentric = budgets.length > 1
-        const url = concentric ? '/isochrone-concentric' : '/isochrone'
+        let url
+        if (refuelMode) url = '/isochrone-refuel'
+        else if (concentric) url = '/isochrone-concentric'
+        else url = '/isochrone'
+
         const body = {
             aircraft: aircraft,
             start: { airport: startIcao },
             budget_min: budgets[0],
             mode: mode,
             reserve_min: reserve,
+            on_station_time_min: onStation,
             wind: wind,
         }
+        if (cruiseAlt !== null && isFinite(cruiseAlt)) body.cruise_altitude_m = cruiseAlt
+        if (startTimeIso) body.start_time = startTimeIso
         if (concentric) body.budgets_min = budgets
-        // round_trip default returns to start; return_safe needs an explicit destination.
-        if (mode === 'return_safe') {
-            const ret = ($('#hyplan-return-airport').val() || '').trim() || startIcao
-            body.return_destination = { airport: ret }
+
+        // return_destination: explicit ICAO field wins; otherwise default to
+        // start for return_safe.  For round_trip the server already defaults
+        // to start; we only set it if the user provided one explicitly.
+        const reachReturnIcao = ($('#hyplan-reach-return-airport').val() || '').trim()
+        if (reachReturnIcao) {
+            body.return_destination = { airport: reachReturnIcao }
+        } else if (mode === 'return_safe') {
+            body.return_destination = { airport: startIcao }
+        }
+
+        if (refuelMode) {
+            body.refuel_airports = refuelAirports
+            body.flight_day_budget_min = dayBudget
+            body.refuel_time_min = parseFloat($('#hyplan-reach-refuel-time').val()) || 60.0
         }
 
         $('#hyplan-reach-status').text('Computing reach…')

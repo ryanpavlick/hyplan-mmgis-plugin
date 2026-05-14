@@ -6,7 +6,7 @@ The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project follows [Semantic Versioning](https://semver.org/).
 
-## v0.4.0 (unreleased)
+## v0.4.0 — 2026-05-14
 
 _Persistence + collaboration release.  Move campaigns off `/tmp` flat
 files, let users round-trip a mission as JSON, guard against
@@ -179,9 +179,21 @@ concurrent overwrites._
 - **Reach (Isochrone) panel section** (4d).  Start airport (defaults
   to Section 1 takeoff), comma-separated budgets in minutes
   (single value → `/isochrone`, multiple → `/isochrone-concentric`),
-  mode selector, reserve.  Aircraft + wind are inherited from
+  mode selector, reserve, cruise altitude, on-station time, start
+  time (inherits Section 1 takeoff time when blank), explicit return
+  airport.  Refuel sub-section exposes refuel-airport list, refuel
+  time, flight-day budget; when populated, switches to
+  `/isochrone-refuel`.  Aircraft + wind are inherited from
   Section 1.  Polygons render in `#0ea5e9` with a per-budget
   tooltip; Clear button removes the layer.
+- **Dockerfile fix:** `service/Dockerfile` was missing `serialize.py`
+  and `store.py` in its explicit COPY list (added in v0.4 #1 and
+  v0.4 #3 respectively), so a fresh `docker compose build
+  hyplan-service` produced an image that crashed at import time with
+  `ImportError: cannot import name 'store' from 'service'`.  Caught
+  during v0.4 #6 work when the docker-served runtime returned 404
+  on `/isochrone` because the running container was still booted
+  from a pre-v0.4 image.
 
 ## v0.3.0 — 2026-05-14
 
