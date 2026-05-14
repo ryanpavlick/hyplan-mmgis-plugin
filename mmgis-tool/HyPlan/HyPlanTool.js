@@ -140,6 +140,23 @@ const markup = `
         <button id="hyplan-cancel-draw-btn" style="display:none">Cancel</button>
         <button id="hyplan-delete-line-btn" disabled>Delete Selected Line</button>
         <div id="hyplan-add-line-status" class="hyplan-status"></div>
+
+        <details style="margin-top:0.5em">
+            <summary style="cursor:pointer; font-size:11px; color:var(--color-c)">Relative-to calculator (bearing + distance from anchor)</summary>
+            <p style="font-size:11px; color:var(--color-c)">Compute a geodesic offset from an anchor point. Use it to place the second endpoint of a line you've started drawing, or copy the result into the line editor.</p>
+            <label>Anchor lat / lon</label>
+            <div style="display:flex; gap:4px">
+                <input type="number" id="hyplan-rel-anchor-lat" step="any" placeholder="lat" />
+                <input type="number" id="hyplan-rel-anchor-lon" step="any" placeholder="lon" />
+            </div>
+            <label>Bearing (deg, true)</label>
+            <input type="number" id="hyplan-rel-bearing" step="any" value="0" />
+            <label>Distance (m)</label>
+            <input type="number" id="hyplan-rel-distance" step="any" value="1000" />
+            <button id="hyplan-rel-compute-btn">Compute</button>
+            <button id="hyplan-rel-use-as-end-btn" style="display:none">Use as line endpoint</button>
+            <div id="hyplan-rel-status" class="hyplan-status"></div>
+        </details>
     </div>
 
     <div class="hyplan-section">
@@ -1019,6 +1036,96 @@ function interfaceWithMMGIS() {
         $('#hyplan-cancel-draw-btn').hide()
         $('#hyplan-add-line-btn').show()
     }
+
+    // --- Relative-to calculator (Section 2b) ----------------------------
+    // Wraps /resolve-relative.  Two flows: (a) compute and display the
+    // resolved point for copy/paste; (b) if the user has clicked the
+    // first endpoint of a line (drawLineStart set), offer to use the
+    // resolved point as the line's second endpoint via /add-line.
+
+    let _relComputed = null   // most recent {latitude, longitude}
+
+    $('#hyplan-rel-compute-btn').on('click', function () {
+        const anchorLat = parseFloat($('#hyplan-rel-anchor-lat').val())
+        const anchorLon = parseFloat($('#hyplan-rel-anchor-lon').val())
+        const bearing = parseFloat($('#hyplan-rel-bearing').val()) || 0
+        const distance = parseFloat($('#hyplan-rel-distance').val()) || 0
+        if (isNaN(anchorLat) || isNaN(anchorLon)) {
+            $('#hyplan-rel-status').text('Enter an anchor lat/lon first.')
+            return
+        }
+        $('#hyplan-rel-status').text('Computing...')
+        fetch(`${SERVICE_URL}/resolve-relative`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                anchor_lat: anchorLat,
+                anchor_lon: anchorLon,
+                bearing_deg: bearing,
+                distance_m: distance,
+            }),
+        })
+            .then(r => r.json())
+            .then(data => {
+                if (data.detail) {
+                    $('#hyplan-rel-status').text('Failed: ' + getErrorMessage(data))
+                    return
+                }
+                _relComputed = { latitude: data.latitude, longitude: data.longitude }
+                $('#hyplan-rel-status').text(
+                    `Resolved: (${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)})`
+                )
+                // Only offer "use as endpoint" if the user has already
+                // clicked a first endpoint on the map.
+                if (drawLineStart) {
+                    $('#hyplan-rel-use-as-end-btn').show()
+                } else {
+                    $('#hyplan-rel-use-as-end-btn').hide()
+                }
+            })
+            .catch(err => {
+                $('#hyplan-rel-status').text('Error: ' + err.message)
+            })
+    })
+
+    $('#hyplan-rel-use-as-end-btn').on('click', function () {
+        if (!_relComputed || !drawLineStart) return
+        const altitude = parseFloat($('#hyplan-altitude').val()) || 3000
+        fetch(`${SERVICE_URL}/add-line`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                campaign_id: campaignId,
+                lat1: drawLineStart.lat,
+                lon1: drawLineStart.lng,
+                lat2: _relComputed.latitude,
+                lon2: _relComputed.longitude,
+                altitude_msl_m: altitude,
+                site_name: `Line ${$('.hyplan-line-item').length + 1} (rel)`,
+            }),
+        })
+            .then(r => r.json())
+            .then(data => {
+                if (data.detail || data.message) {
+                    $('#hyplan-rel-status').text('Error: ' + getErrorMessage(data))
+                    return
+                }
+                if (data.campaign_id) campaignId = data.campaign_id
+                displayFlightLines(data.flight_lines)
+                updateLineList(data.flight_lines)
+                $('#hyplan-rel-status').text(`Added line ${data.added_line_id} (relative endpoint).`)
+                // Exit draw mode.
+                drawLineMode = false
+                drawLineStart = null
+                Map_.map.off('click', onDrawLineClick)
+                $('#hyplan-cancel-draw-btn').hide()
+                $('#hyplan-add-line-btn').show()
+                $('#hyplan-rel-use-as-end-btn').hide()
+            })
+            .catch(err => {
+                $('#hyplan-rel-status').text('Error: ' + err.message)
+            })
+    })
 
     // --- Delete Selected Line ---
     $('#hyplan-delete-line-btn').on('click', function () {

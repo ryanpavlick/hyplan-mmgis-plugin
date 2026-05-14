@@ -129,6 +129,22 @@ class AddLineRequest(BaseModel):
     site_name: Optional[str] = None
 
 
+class ResolveRelativeRequest(BaseModel):
+    """Compute a point at a geodesic offset from an anchor.
+
+    Wraps :func:`hyplan.waypoint.Waypoint.relative_to`'s Vincenty math.
+    Used by the frontend "place this endpoint 100 nm @ 270° from
+    waypoint X" workflow; the resolved ``lat / lon`` can be fed into
+    any existing endpoint (``/add-line``, ``/edit-line``,
+    `/compute-plan`` waypoint entries) — no per-feature
+    "*-relative" variant needed.
+    """
+    anchor_lat: float
+    anchor_lon: float
+    bearing_deg: float
+    distance_m: float
+
+
 class EditLineRequest(BaseModel):
     campaign_id: str
     line_id: str

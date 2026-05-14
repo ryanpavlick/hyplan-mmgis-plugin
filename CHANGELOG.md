@@ -32,6 +32,22 @@ new users._
   in place.  The pattern selector mirrors the existing
   `patternsCache` and re-renders whenever the patterns list changes.
 
+- **`/resolve-relative` endpoint** exposing HyPlan's
+  `Waypoint.relative_to` (Vincenty) as a geodesic calculator: pass
+  `{anchor_lat, anchor_lon, bearing_deg, distance_m}`, get back
+  `{latitude, longitude}` plus the echoed inputs.  Composes with
+  existing endpoints (`/add-line`, `/edit-line`, `/compute-plan`
+  waypoint entries) — no per-feature "*-relative" variant needed.
+  Three pytest cases (north 1 km, east 1 km, end-to-end composition
+  with `/add-line`).
+
+- **Relative-to calculator** in the MMGIS Add-Line section.  A
+  collapsible `<details>` panel takes an anchor (lat/lon), bearing
+  (°true), and distance (m), and either displays the resolved
+  coordinates for copy/paste or — if the user has already clicked a
+  first endpoint on the map — offers a "Use as line endpoint" button
+  that closes the line via `/add-line`.
+
 ## v0.2.0 — 2026-05-13
 
 _DevEx + tests release.  Lays the groundwork for landing larger feature

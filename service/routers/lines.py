@@ -14,6 +14,7 @@ from ..schemas import (
     AddLineRequest,
     DeleteLineRequest,
     EditLineRequest,
+    ResolveRelativeRequest,
     TransformLinesRequest,
 )
 from ..state import get_campaign, get_or_create_campaign, persist_campaign
@@ -51,6 +52,39 @@ def add_line(req: AddLineRequest):
         "added_line_id": campaign.flight_line_ids[-1],
         "campaign_id": campaign.campaign_id,
         "revision": campaign.revision,
+    }
+
+
+@router.post("/resolve-relative")
+def resolve_relative(req: ResolveRelativeRequest):
+    """Resolve a point at a geodesic offset from an anchor.
+
+    Returns ``{latitude, longitude}``.  The frontend uses this for
+    the "place this endpoint 100 nm @ 270° from waypoint X" workflow
+    — the user enters anchor + bearing + distance, the backend does
+    the Vincenty math (via :meth:`Waypoint.relative_to`), the
+    resolved coordinates flow into the existing /add-line or
+    /edit-line endpoint with no per-feature "*-relative" variant.
+    """
+    from hyplan.waypoint import Waypoint
+    try:
+        wp = Waypoint.relative_to(
+            anchor=(req.anchor_lat, req.anchor_lon),
+            bearing=req.bearing_deg,
+            distance=req.distance_m * ureg.meter,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise_http("resolve-relative", exc)
+
+    return {
+        "latitude": wp.latitude,
+        "longitude": wp.longitude,
+        "anchor_lat": req.anchor_lat,
+        "anchor_lon": req.anchor_lon,
+        "bearing_deg": req.bearing_deg,
+        "distance_m": req.distance_m,
     }
 
 

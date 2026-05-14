@@ -109,6 +109,66 @@ def test_transform_reverse(client, campaign_with_lines):
     assert after_coords[-1] == before_coords[0]
 
 
+def test_resolve_relative_north_1km(client):
+    """1 km due north of (35, -120) lands at ~(35.009, -120)."""
+    resp = client.post(
+        "/resolve-relative",
+        json={
+            "anchor_lat": 35.0,
+            "anchor_lon": -120.0,
+            "bearing_deg": 0,    # north
+            "distance_m": 1000,
+        },
+    )
+    assert resp.status_code == 200, resp.json()
+    body = resp.json()
+    assert abs(body["latitude"] - 35.009) < 0.001    # 1/111 deg
+    assert abs(body["longitude"] - (-120.0)) < 0.001  # purely north
+    # Echoed inputs are present.
+    assert body["bearing_deg"] == 0
+    assert body["distance_m"] == 1000
+
+
+def test_resolve_relative_east_1km(client):
+    """1 km due east of (35, -120).  At 35° latitude one degree of
+    longitude is ~91 km, so 1 km east ≈ 0.011° longitude east."""
+    resp = client.post(
+        "/resolve-relative",
+        json={
+            "anchor_lat": 35.0,
+            "anchor_lon": -120.0,
+            "bearing_deg": 90,
+            "distance_m": 1000,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert abs(body["latitude"] - 35.0) < 0.001        # purely east
+    assert body["longitude"] > -120.0                   # moved east
+    assert 0.008 < (body["longitude"] - (-120.0)) < 0.013
+
+
+def test_resolve_relative_then_add_line_composes(client):
+    """Resolve a relative point, then use it as one endpoint of /add-line.
+    Demonstrates the intended frontend composition pattern."""
+    pt = client.post(
+        "/resolve-relative",
+        json={"anchor_lat": 35.25, "anchor_lon": -120.0, "bearing_deg": 45, "distance_m": 5000},
+    ).json()
+
+    add = client.post(
+        "/add-line",
+        json={
+            "lat1": 35.25, "lon1": -120.0,
+            "lat2": pt["latitude"], "lon2": pt["longitude"],
+            "altitude_msl_m": 5000,
+            "site_name": "relative-test",
+        },
+    )
+    assert add.status_code == 200, add.json()
+    assert add.json()["added_line_id"]
+
+
 def test_unknown_operation_is_400(client, campaign_with_lines):
     resp = client.post(
         "/transform-lines",
