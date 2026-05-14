@@ -79,8 +79,8 @@ const markup = `
 <div id="hyplanTool">
     <h3>HyPlan Flight Planner</h3>
 
-    <div class="hyplan-section">
-        <h3>1. Campaign</h3>
+    <details class="hyplan-section" open>
+        <summary>1. Campaign</summary>
         <label>Campaign Name</label>
         <input type="text" id="hyplan-campaign-name" value="Mission" />
         <label>Aircraft</label>
@@ -115,10 +115,10 @@ const markup = `
         <button id="hyplan-show-wind-btn">Show Wind on Map</button>
         <button id="hyplan-hide-wind-btn" style="display:none">Hide Wind</button>
         <div id="hyplan-wind-status" class="hyplan-status"></div>
-    </div>
+    </details>
 
-    <div class="hyplan-section">
-        <h3>2. Generate Flight Lines</h3>
+    <details class="hyplan-section">
+        <summary>2. Generate Flight Lines</summary>
         <p style="font-size:11px; color:var(--color-c)">Draw a polygon on the map using the Draw tool, then click Generate.</p>
         <label>Altitude (m MSL)</label>
         <input type="number" id="hyplan-altitude" value="3000" />
@@ -131,10 +131,10 @@ const markup = `
         <div id="hyplan-optimize-azimuth-plot"></div>
         <button id="hyplan-generate-btn">Generate Flight Box</button>
         <div id="hyplan-generate-status" class="hyplan-status"></div>
-    </div>
+    </details>
 
-    <div class="hyplan-section">
-        <h3>2b. Individual Lines</h3>
+    <details class="hyplan-section">
+        <summary>2b. Individual Lines</summary>
         <p style="font-size:11px; color:var(--color-c)">Click two points on the map to add a line, or enter coordinates.</p>
         <button id="hyplan-add-line-btn">Draw Line on Map</button>
         <button id="hyplan-cancel-draw-btn" style="display:none">Cancel</button>
@@ -157,10 +157,10 @@ const markup = `
             <button id="hyplan-rel-use-as-end-btn" style="display:none">Use as line endpoint</button>
             <div id="hyplan-rel-status" class="hyplan-status"></div>
         </details>
-    </div>
+    </details>
 
-    <div class="hyplan-section">
-        <h3>2c. Flight Patterns</h3>
+    <details class="hyplan-section">
+        <summary>2c. Flight Patterns</summary>
         <p style="font-size:11px; color:var(--color-c)">Click a point on the map to set the center, then generate.</p>
         <label>Pattern</label>
         <select id="hyplan-pattern-type">
@@ -178,16 +178,16 @@ const markup = `
         <button id="hyplan-cancel-pattern-btn" style="display:none">Cancel</button>
         <button id="hyplan-generate-pattern-btn" disabled>Generate Pattern</button>
         <div id="hyplan-pattern-status" class="hyplan-status"></div>
-    </div>
+    </details>
 
-    <div class="hyplan-section">
-        <h3>2d. Patterns in Campaign</h3>
+    <details class="hyplan-section">
+        <summary>2d. Patterns in Campaign</summary>
         <p style="font-size:11px; color:var(--color-c)">Delete a pattern as a whole. Line patterns also show each leg in the line list above for individual selection/transform.</p>
         <div id="hyplan-patterns-list" class="hyplan-patterns-list"></div>
-    </div>
+    </details>
 
-    <div class="hyplan-section">
-        <h3>2e. Move Pattern</h3>
+    <details class="hyplan-section">
+        <summary>2e. Move Pattern</summary>
         <p style="font-size:11px; color:var(--color-c)">Move a whole pattern in place: shift it N/E, re-anchor at a lat/lon, or rotate it about its center. The pattern keeps its identity and any compute-sequence references stay valid.</p>
         <label>Pattern</label>
         <select id="hyplan-move-pattern-select"></select>
@@ -207,20 +207,20 @@ const markup = `
         </div>
         <button id="hyplan-move-pattern-btn" disabled>Apply</button>
         <div id="hyplan-move-pattern-status" class="hyplan-status"></div>
-    </div>
+    </details>
 
-    <div class="hyplan-section">
-        <h3>3. Select & Order Lines</h3>
+    <details class="hyplan-section">
+        <summary>3. Select & Order Lines</summary>
         <button id="hyplan-select-all-btn">Select All</button>
         <button id="hyplan-clear-selection-btn">Clear</button>
         <button id="hyplan-optimize-btn" disabled>Optimize Order</button>
         <div id="hyplan-line-list" class="hyplan-line-list"></div>
         <div id="hyplan-selection-status" class="hyplan-status"></div>
         <div id="hyplan-optimize-status" class="hyplan-status"></div>
-    </div>
+    </details>
 
-    <div class="hyplan-section">
-        <h3>3b. Transform Selected Lines</h3>
+    <details class="hyplan-section">
+        <summary>3b. Transform Selected Lines</summary>
         <label>Operation</label>
         <select id="hyplan-transform-op">
             <option value="rotate">Rotate (deg)</option>
@@ -239,25 +239,25 @@ const markup = `
         </div>
         <button id="hyplan-transform-btn" disabled>Apply Transform</button>
         <div id="hyplan-transform-status" class="hyplan-status"></div>
-    </div>
+    </details>
 
-    <div class="hyplan-section">
-        <h3>4. Compute Flight Plan</h3>
+    <details class="hyplan-section">
+        <summary>4. Compute Flight Plan</summary>
         <button id="hyplan-compute-btn" disabled>Compute Plan</button>
         <button id="hyplan-clear-plan-btn" style="display:none">Clear Plan</button>
         <div id="hyplan-compute-status" class="hyplan-status"></div>
         <div id="hyplan-summary"></div>
-    </div>
+    </details>
 
-    <div class="hyplan-section">
-        <h3>4b. Swath Display</h3>
+    <details class="hyplan-section">
+        <summary>4b. Swath Display</summary>
         <button id="hyplan-show-swaths-btn" disabled>Generate Swaths</button>
         <button id="hyplan-hide-swaths-btn" style="display:none">Hide Swaths</button>
         <div id="hyplan-swath-status" class="hyplan-status"></div>
-    </div>
+    </details>
 
-    <div class="hyplan-section">
-        <h3>4c. Glint Analysis</h3>
+    <details class="hyplan-section">
+        <summary>4c. Glint Analysis</summary>
         <p style="font-size:11px; color:var(--color-c)">For each selected line at the takeoff time and current sensor, plots per-swath-sample glint angle. Rotate or shift selected lines (Section 3b) or change the takeoff time (Section 1) and re-compute to minimize glint.</p>
         <label>Glint threshold (deg)</label>
         <input type="number" id="hyplan-glint-threshold" value="25" step="1" min="1" max="90" />
@@ -265,10 +265,10 @@ const markup = `
         <button id="hyplan-hide-glint-btn" style="display:none">Hide Glint</button>
         <div id="hyplan-glint-status" class="hyplan-status"></div>
         <div id="hyplan-glint-summary"></div>
-    </div>
+    </details>
 
-    <div class="hyplan-section">
-        <h3>5. Solar Position</h3>
+    <details class="hyplan-section">
+        <summary>5. Solar Position</summary>
         <p style="font-size:11px; color:var(--color-c)">Plot solar zenith angle through the day at a chosen point. Pick a location on the map, or use the midpoint of a selected flight line.</p>
         <button id="hyplan-pick-solar-point-btn">Plot at Map Point</button>
         <button id="hyplan-cancel-pick-solar-btn" style="display:none">Cancel</button>
@@ -277,14 +277,14 @@ const markup = `
         <div id="hyplan-solar-status" class="hyplan-status"></div>
         <div id="hyplan-solar-plot"></div>
         <div id="hyplan-solar-meta" style="font-size:11px; color:var(--color-c); margin-top:4px"></div>
-    </div>
+    </details>
 
-    <div class="hyplan-section">
-        <h3>6. Export</h3>
+    <details class="hyplan-section">
+        <summary>6. Export</summary>
         <button id="hyplan-export-btn" disabled>Export KML + GPX</button>
         <div id="hyplan-export-status" class="hyplan-status"></div>
         <div id="hyplan-download-links"></div>
-    </div>
+    </details>
 </div>
 `
 
@@ -1725,6 +1725,16 @@ function displayFlightLines(geojson) {
                 const lineId = feature.properties.line_id || feature.id
                 toggleLineSelection(lineId)
             })
+            // Right-click on a flight line surfaces the same per-line
+            // ops we have in Section 3b (Transform Selected Lines)
+            // and Section 2b (delete), without making the user open
+            // those sections and click the line in the list first.
+            layer.on('contextmenu', function (e) {
+                const lineId = feature.properties.line_id || feature.id
+                window.L.DomEvent.stopPropagation(e)
+                if (e.originalEvent) e.originalEvent.preventDefault()
+                showLineContextMenu(lineId, name, e.originalEvent)
+            })
         },
     })).addTo(Map_.map)
 
@@ -1925,8 +1935,188 @@ function renderPatternsLayer(geojson) {
             const p = feature.properties || {}
             const label = p.name || p.pattern_kind
             if (label) layer.bindTooltip(label, { sticky: true })
+            // Right-click on a pattern: same operations as Section
+            // 2e (Move Pattern) and 2d (Delete), available in place.
+            layer.on('contextmenu', function (e) {
+                const pid = p.pattern_id
+                if (!pid) return
+                window.L.DomEvent.stopPropagation(e)
+                if (e.originalEvent) e.originalEvent.preventDefault()
+                showPatternContextMenu(pid, label || pid, e.originalEvent)
+            })
         },
     })).addTo(Map_.map)
+}
+
+// --- Right-click context menus ------------------------------------------
+// One menu shown at a time; clicking elsewhere or pressing Escape
+// dismisses.  Items hit the same backend endpoints the panel sections
+// do, just bypassing the section-and-click-in-list dance.
+
+let _hyplanContextMenu = null
+
+function dismissContextMenu() {
+    if (_hyplanContextMenu && _hyplanContextMenu.parentNode) {
+        _hyplanContextMenu.parentNode.removeChild(_hyplanContextMenu)
+    }
+    _hyplanContextMenu = null
+    document.removeEventListener('mousedown', _dismissOnOutsideClick, true)
+    document.removeEventListener('keydown', _dismissOnEscape, true)
+}
+function _dismissOnOutsideClick(e) {
+    if (_hyplanContextMenu && !_hyplanContextMenu.contains(e.target)) {
+        dismissContextMenu()
+    }
+}
+function _dismissOnEscape(e) {
+    if (e.key === 'Escape') dismissContextMenu()
+}
+
+function showContextMenu(originalEvent, headerText, items) {
+    // items: [{ label, danger?: bool, onClick: () => void }] or
+    //         { divider: true }
+    dismissContextMenu()
+    const menu = document.createElement('div')
+    menu.className = 'hyplan-context-menu'
+
+    if (headerText) {
+        const h = document.createElement('div')
+        h.className = 'hyplan-cm-header'
+        h.textContent = headerText
+        menu.appendChild(h)
+    }
+
+    items.forEach(function (it) {
+        if (it.divider) {
+            const d = document.createElement('div')
+            d.className = 'hyplan-cm-divider'
+            menu.appendChild(d)
+            return
+        }
+        const btn = document.createElement('button')
+        btn.className = 'hyplan-cm-item' + (it.danger ? ' danger' : '')
+        btn.textContent = it.label
+        btn.addEventListener('click', function () {
+            dismissContextMenu()
+            try {
+                it.onClick()
+            } catch (e) { /* surface in JS console; panel status will catch follow-on errors */ }
+        })
+        menu.appendChild(btn)
+    })
+
+    // Position at the cursor; flip if it would overflow the viewport edge.
+    document.body.appendChild(menu)
+    const r = menu.getBoundingClientRect()
+    let x = originalEvent.pageX
+    let y = originalEvent.pageY
+    if (x + r.width > window.innerWidth) x = window.innerWidth - r.width - 4
+    if (y + r.height > window.innerHeight) y = window.innerHeight - r.height - 4
+    menu.style.left = x + 'px'
+    menu.style.top = y + 'px'
+
+    _hyplanContextMenu = menu
+    // Defer attaching the dismiss listeners so the click that opened
+    // the menu doesn't immediately close it.
+    setTimeout(function () {
+        document.addEventListener('mousedown', _dismissOnOutsideClick, true)
+        document.addEventListener('keydown', _dismissOnEscape, true)
+    }, 0)
+}
+
+function showLineContextMenu(lineId, siteName, originalEvent) {
+    if (!campaignId) return
+    const items = [
+        { label: 'Reverse direction',     onClick: () => transformOneLine(lineId, 'reverse', {}) },
+        { label: 'Rotate +15°',           onClick: () => transformOneLine(lineId, 'rotate', { angle_deg: 15 }) },
+        { label: 'Rotate −15°',           onClick: () => transformOneLine(lineId, 'rotate', { angle_deg: -15 }) },
+        { label: 'Offset across +500 m',  onClick: () => transformOneLine(lineId, 'offset_across', { distance_m: 500 }) },
+        { label: 'Offset across −500 m',  onClick: () => transformOneLine(lineId, 'offset_across', { distance_m: -500 }) },
+        { label: 'Shift N 1 km',          onClick: () => transformOneLine(lineId, 'offset_north_east', { north_m: 1000, east_m: 0 }) },
+        { label: 'Shift E 1 km',          onClick: () => transformOneLine(lineId, 'offset_north_east', { north_m: 0, east_m: 1000 }) },
+        { divider: true },
+        { label: 'Delete line',           danger: true, onClick: () => deleteOneLine(lineId) },
+    ]
+    showContextMenu(originalEvent, siteName + ' (line)', items)
+}
+
+function showPatternContextMenu(patternId, name, originalEvent) {
+    if (!campaignId) return
+    const items = [
+        { label: 'Translate N 1 km',  onClick: () => transformOnePattern(patternId, 'translate', { north_m: 1000, east_m: 0 }) },
+        { label: 'Translate S 1 km',  onClick: () => transformOnePattern(patternId, 'translate', { north_m: -1000, east_m: 0 }) },
+        { label: 'Translate E 1 km',  onClick: () => transformOnePattern(patternId, 'translate', { north_m: 0, east_m: 1000 }) },
+        { label: 'Translate W 1 km',  onClick: () => transformOnePattern(patternId, 'translate', { north_m: 0, east_m: -1000 }) },
+        { label: 'Rotate +15°',       onClick: () => transformOnePattern(patternId, 'rotate', { angle_deg: 15 }) },
+        { label: 'Rotate −15°',       onClick: () => transformOnePattern(patternId, 'rotate', { angle_deg: -15 }) },
+        { divider: true },
+        { label: 'Delete pattern',    danger: true, onClick: () => deletePattern(patternId) },
+    ]
+    showContextMenu(originalEvent, name + ' (pattern)', items)
+}
+
+function transformOneLine(lineId, operation, params) {
+    fetch(`${SERVICE_URL}/transform-lines`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            campaign_id: campaignId,
+            line_ids: [lineId],
+            operation: operation,
+            params: params,
+        }),
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail) return
+            displayFlightLines(data.flight_lines)
+            updateLineList(data.flight_lines)
+            renderPatternsLayer(data.patterns)
+        })
+}
+
+function deleteOneLine(lineId) {
+    fetch(`${SERVICE_URL}/delete-line`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaign_id: campaignId, line_id: lineId }),
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail) return
+            displayFlightLines(data.flight_lines)
+            updateLineList(data.flight_lines)
+            renderPatternsLayer(data.patterns)
+            selectedLineIds = selectedLineIds.filter(id => id !== lineId)
+        })
+}
+
+function transformOnePattern(patternId, operation, params) {
+    fetch(`${SERVICE_URL}/transform-pattern`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            campaign_id: campaignId,
+            pattern_id: patternId,
+            operation: operation,
+            params: params,
+        }),
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.detail) return
+            displayFlightLines(data.flight_lines)
+            updateLineList(data.flight_lines)
+            renderPatternsLayer(data.patterns)
+            const idx = patternsCache.findIndex(p => p.pattern_id === patternId)
+            if (idx >= 0) patternsCache[idx] = {
+                pattern_id: data.pattern_id,
+                kind: data.pattern_kind,
+                name: data.pattern_name,
+                is_line_based: data.is_line_based,
+                params: data.pattern_params,
+            }
+        })
 }
 
 function renderPatternsList() {

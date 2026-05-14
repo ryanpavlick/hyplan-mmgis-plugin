@@ -67,6 +67,30 @@ new users._
   Local preview via `cd docs && bundle exec jekyll serve` against
   the committed `Gemfile`.
 
+### Changed
+
+- **Panel reorganized as accordion sections.**  Each of the 13
+  workflow sections is now a `<details>` element; only Section 1
+  (Campaign) is open by default.  Custom chevron + hover styling
+  for the `<summary>` headers.  Eliminates the previous vertical-
+  scroll wall; users see only what they're working on.
+
+- **Right-click context menus on map objects.**  Per-object
+  operations are now available in place — no more "open Section 3b,
+  click line in list, configure, apply".
+  - Right-click a flight line: Reverse direction, Rotate ±15°,
+    Offset across ±500 m, Shift N/E 1 km, Delete.  Wired to the
+    existing `/transform-lines` and `/delete-line` endpoints with
+    pre-filled params; the panel sections remain available for
+    custom params and batch ops.
+  - Right-click a pattern (waypoint-based; line-based pattern legs
+    are still per-line): Translate N/S/E/W 1 km, Rotate ±15°,
+    Delete pattern.  Wired to `/transform-pattern` and
+    `/delete-pattern`.
+  - Menu auto-dismisses on outside click or Escape; clips against
+    the viewport edges.  Lives outside `#hyplanTool` so it can
+    overlay the entire map.
+
 ## v0.2.0 — 2026-05-13
 
 _DevEx + tests release.  Lays the groundwork for landing larger feature
