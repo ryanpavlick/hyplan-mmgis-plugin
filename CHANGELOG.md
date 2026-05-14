@@ -6,13 +6,20 @@ The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project follows [Semantic Versioning](https://semver.org/).
 
-## v0.3.0 (unreleased)
+## v0.4.0 (unreleased)
+
+_Persistence + collaboration release.  Move campaigns off `/tmp` flat
+files, let users round-trip a mission as JSON, guard against
+concurrent overwrites._
+
+## v0.3.0 — 2026-05-14
 
 _HyPlan v1.7 features the plugin doesn't expose yet — pattern movement
 (`Pattern.translate / move_to / rotate / from_relative`) and geodesic
 waypoint placement (`Waypoint.relative_to`), surfaced through the
 service and the MMGIS panel.  Plus a 10-minute walkthrough doc for
-new users._
+new users, a UI rework (accordion + map-object context menus), and
+the [documentation site](https://ryanpavlick.github.io/hyplan-mmgis-plugin/)._
 
 ### Added
 

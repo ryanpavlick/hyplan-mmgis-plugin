@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 class HealthResponse(BaseModel):
     status: str = "ok"
     hyplan_version: str
-    service_version: str = "0.3.0"
+    service_version: str = "0.4.0"
 
 
 # --- Line generation ----------------------------------------------------
