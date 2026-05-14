@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from typing import Optional
+
+from fastapi import APIRouter, Header, HTTPException
 from shapely.geometry import shape
 
 from hyplan.flight_box import box_around_polygon, box_around_center_line
@@ -11,19 +13,23 @@ from hyplan.units import ureg
 
 from ..errors import raise_http
 from ..schemas import GenerateLinesRequest, GenerateLinesResponse
-from ..state import get_or_create_campaign, persist_campaign
+from ..state import check_revision, get_or_create_campaign, persist_campaign
 
 router = APIRouter()
 
 
 @router.post("/generate-lines", response_model=GenerateLinesResponse)
-def generate_lines(req: GenerateLinesRequest):
+def generate_lines(
+    req: GenerateLinesRequest,
+    if_match: Optional[str] = Header(default=None, alias="If-Match"),
+):
     """Generate flight lines from geometry and planning parameters."""
     warnings: list[str] = []
 
     campaign = get_or_create_campaign(
         req.campaign_id, req.campaign_name, req.campaign_bounds,
     )
+    check_revision(campaign, if_match)
 
     gen = req.generator
     kind = gen.get("kind", "box_around_polygon")

@@ -119,6 +119,53 @@ def make_aircraft(name: str) -> Aircraft:
     return cls()
 
 
+def check_revision(campaign: Campaign, if_match: Any) -> None:
+    """Concurrent-edit guard: enforce a client-supplied ``If-Match`` header.
+
+    Patterned after the HTTP ``If-Match`` precondition.  The frontend
+    sends ``If-Match: <revision>`` on every write; if the server's
+    current ``campaign.revision`` no longer matches, two clients have
+    raced and the write is rejected with a ``409 Conflict`` plus a
+    structured detail so the UI can show the actual server revision
+    and offer to refresh.
+
+    No-op when:
+    - ``if_match`` is ``None`` or empty string (legacy / unbounded
+      clients can keep writing without a precondition).
+    - The campaign was just created in this request (its revision
+      is still 0).  This lets create-on-demand endpoints like
+      ``/generate-lines`` carry an ``If-Match`` aimed at a future
+      revision without tripping on the initial save.
+    """
+    if if_match is None or if_match == "":
+        return
+    try:
+        expected = int(if_match)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": f"Invalid If-Match header: {if_match!r}.  Expected integer revision.",
+                "code": "bad_if_match",
+                "operation": "check_revision",
+            },
+        )
+    if campaign.revision != expected:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": (
+                    f"Revision mismatch: client has {expected}, server is at "
+                    f"{campaign.revision}.  Refresh and retry."
+                ),
+                "code": "revision_mismatch",
+                "operation": "check_revision",
+                "client_revision": expected,
+                "server_revision": campaign.revision,
+            },
+        )
+
+
 def get_plan(campaign_id: str):
     """Return the most recently computed plan for ``campaign_id`` or ``None``."""
     return _plans.get(campaign_id)

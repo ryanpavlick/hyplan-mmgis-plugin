@@ -15,7 +15,7 @@ import logging
 import traceback
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 
 from hyplan.instruments import create_sensor
 from hyplan.units import ureg
@@ -27,7 +27,13 @@ from ..schemas import (
     ReplacePatternRequest,
     TransformPatternRequest,
 )
-from ..state import get_campaign, get_or_create_campaign, make_aircraft, persist_campaign
+from ..state import (
+    check_revision,
+    get_campaign,
+    get_or_create_campaign,
+    make_aircraft,
+    persist_campaign,
+)
 
 logger = logging.getLogger("hyplan-service")
 
@@ -229,11 +235,15 @@ def _compute_arc_glint_preview(pattern, sensor_name: str, max_points: int = 4000
 
 
 @router.post("/generate-pattern")
-def generate_pattern(req: PatternRequest):
+def generate_pattern(
+    req: PatternRequest,
+    if_match: Optional[str] = Header(default=None, alias="If-Match"),
+):
     """Generate a flight pattern and add it to the campaign."""
     campaign = get_or_create_campaign(
         req.campaign_id, req.campaign_name, req.campaign_bounds,
     )
+    check_revision(campaign, if_match)
 
     try:
         pattern = _invoke_pattern_generator(
@@ -274,9 +284,13 @@ def generate_pattern(req: PatternRequest):
 
 
 @router.post("/delete-pattern")
-def delete_pattern(req: DeletePatternRequest):
+def delete_pattern(
+    req: DeletePatternRequest,
+    if_match: Optional[str] = Header(default=None, alias="If-Match"),
+):
     """Delete a pattern and all its legs/waypoints from the campaign."""
     campaign = get_campaign(req.campaign_id)
+    check_revision(campaign, if_match)
     try:
         campaign.remove_pattern(req.pattern_id)
     except Exception as exc:
@@ -291,7 +305,10 @@ def delete_pattern(req: DeletePatternRequest):
 
 
 @router.post("/replace-pattern")
-def replace_pattern(req: ReplacePatternRequest):
+def replace_pattern(
+    req: ReplacePatternRequest,
+    if_match: Optional[str] = Header(default=None, alias="If-Match"),
+):
     """Regenerate a pattern in place with parameter overrides.
 
     ``overrides`` is merged into the pattern's stored params
@@ -300,6 +317,7 @@ def replace_pattern(req: ReplacePatternRequest):
     ``line_id``\\ s.
     """
     campaign = get_campaign(req.campaign_id)
+    check_revision(campaign, if_match)
     try:
         old = campaign.get_pattern(req.pattern_id)
     except Exception as exc:
@@ -316,7 +334,10 @@ def replace_pattern(req: ReplacePatternRequest):
 
 
 @router.post("/transform-pattern")
-def transform_pattern(req: TransformPatternRequest):
+def transform_pattern(
+    req: TransformPatternRequest,
+    if_match: Optional[str] = Header(default=None, alias="If-Match"),
+):
     """Move a whole pattern in place via HyPlan's ``Pattern`` movement DSL.
 
     Three operations, each preserving the pattern_id:
@@ -332,6 +353,7 @@ def transform_pattern(req: TransformPatternRequest):
     keep working.
     """
     campaign = get_campaign(req.campaign_id)
+    check_revision(campaign, if_match)
     try:
         old = campaign.get_pattern(req.pattern_id)
     except Exception as exc:

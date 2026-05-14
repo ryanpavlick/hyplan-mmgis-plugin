@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
+from typing import Optional
 
 from hyplan.flight_line import FlightLine
 from hyplan.units import ureg
@@ -17,13 +18,21 @@ from ..schemas import (
     ResolveRelativeRequest,
     TransformLinesRequest,
 )
-from ..state import get_campaign, get_or_create_campaign, persist_campaign
+from ..state import (
+    check_revision,
+    get_campaign,
+    get_or_create_campaign,
+    persist_campaign,
+)
 
 router = APIRouter()
 
 
 @router.post("/add-line")
-def add_line(req: AddLineRequest):
+def add_line(
+    req: AddLineRequest,
+    if_match: Optional[str] = Header(default=None, alias="If-Match"),
+):
     """Add a single flight line to a campaign."""
     if not req.campaign_id:
         # Create a new campaign from the line's midpoint
@@ -37,6 +46,7 @@ def add_line(req: AddLineRequest):
         )
     else:
         campaign = get_campaign(req.campaign_id)
+        check_revision(campaign, if_match)
     line = FlightLine.from_endpoints(
         req.lat1, req.lon1, req.lat2, req.lon2,
         altitude_msl=req.altitude_msl_m * ureg.meter,
@@ -89,9 +99,13 @@ def resolve_relative(req: ResolveRelativeRequest):
 
 
 @router.post("/edit-line")
-def edit_line(req: EditLineRequest):
+def edit_line(
+    req: EditLineRequest,
+    if_match: Optional[str] = Header(default=None, alias="If-Match"),
+):
     """Edit an existing flight line's endpoints, altitude, or name."""
     campaign = get_campaign(req.campaign_id)
+    check_revision(campaign, if_match)
 
     try:
         old = campaign.get_line(req.line_id)
@@ -121,9 +135,13 @@ def edit_line(req: EditLineRequest):
 
 
 @router.post("/delete-line")
-def delete_line(req: DeleteLineRequest):
+def delete_line(
+    req: DeleteLineRequest,
+    if_match: Optional[str] = Header(default=None, alias="If-Match"),
+):
     """Delete a flight line from a campaign (free-standing or pattern leg)."""
     campaign = get_campaign(req.campaign_id)
+    check_revision(campaign, if_match)
     try:
         campaign.remove_line_anywhere(req.line_id)
     except Exception as exc:
@@ -138,7 +156,10 @@ def delete_line(req: DeleteLineRequest):
 
 
 @router.post("/transform-lines")
-def transform_lines(req: TransformLinesRequest):
+def transform_lines(
+    req: TransformLinesRequest,
+    if_match: Optional[str] = Header(default=None, alias="If-Match"),
+):
     """Apply a geometric transform to one or more flight lines.
 
     Lines may be free-standing or owned by a line-based pattern; either
@@ -147,6 +168,7 @@ def transform_lines(req: TransformLinesRequest):
     preserved.
     """
     campaign = get_campaign(req.campaign_id)
+    check_revision(campaign, if_match)
     params = req.params
     transformed = 0
 

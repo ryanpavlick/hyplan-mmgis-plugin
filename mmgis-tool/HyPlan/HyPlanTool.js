@@ -20,6 +20,12 @@ let SERVICE_URL = 'http://localhost:8100'
 // identity, current line/pattern selections, and references to plugin-owned
 // Leaflet layers so we can replace them cleanly.
 let campaignId = null
+// Most recent revision the server told us about.  Sent as
+// `If-Match: <revision>` on every mutating fetch so two clients
+// editing the same campaign can't silently clobber each other —
+// the late one gets a 409 and can refresh.  Tracked in module
+// scope (refreshed by trackRevision() below from every response).
+let lastCampaignRevision = null
 let flightLineLayer = null
 let planLayer = null
 let selectedLineIds = []
@@ -54,6 +60,26 @@ function hyplanDisownAndRemove(layer) {
     if (Map_.map && Map_.map.hasLayer(layer)) {
         Map_.map.removeLayer(layer)
     }
+}
+
+// --- Concurrent-edit guard plumbing ------------------------------------
+// trackRevision() pulls the server's revision out of any response
+// that carries one and parks it in module state.  withIfMatch()
+// merges `If-Match: <revision>` into a headers object so the next
+// write can be rejected with 409 if another client raced us.  Both
+// are wired into every write fetch in this file; reads (GET) skip
+// the precondition.
+
+function trackRevision(data) {
+    if (data && typeof data.revision === 'number') {
+        lastCampaignRevision = data.revision
+    }
+    return data
+}
+
+function withIfMatch(headers) {
+    if (lastCampaignRevision == null) return headers
+    return Object.assign({}, headers || {}, { 'If-Match': String(lastCampaignRevision) })
 }
 
 let _hyplanSelfHealInstalled = false
@@ -353,7 +379,7 @@ function interfaceWithMMGIS() {
         if (!campaignId) return
         $('#hyplan-campaign-io-status').text('Exporting...')
         fetch(`${SERVICE_URL}/campaigns/${campaignId}/export`)
-            .then(r => r.json())
+            .then(r => r.json()).then(trackRevision)
             .then(bundle => {
                 if (bundle.detail) {
                     $('#hyplan-campaign-io-status').text('Failed: ' + getErrorMessage(bundle))
@@ -402,10 +428,10 @@ function interfaceWithMMGIS() {
             }
             fetch(`${SERVICE_URL}/campaigns/import`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: withIfMatch({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ bundle: bundle, replace: false }),
             })
-                .then(r => r.json())
+                .then(r => r.json()).then(trackRevision)
                 .then(data => {
                     if (data.detail) {
                         $('#hyplan-campaign-io-status').text('Failed: ' + getErrorMessage(data))
@@ -454,7 +480,7 @@ function interfaceWithMMGIS() {
 
         fetch(`${SERVICE_URL}/wind-grid`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 source: windKind,
                 bounds: [
@@ -520,7 +546,7 @@ function interfaceWithMMGIS() {
 
     // Check service connectivity
     fetch(`${SERVICE_URL}/health`)
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.status === 'ok') {
                 $('#hyplan-generate-status').text(`Connected to HyPlan service v${data.service_version}`)
@@ -535,7 +561,7 @@ function interfaceWithMMGIS() {
 
     // Load aircraft and sensor lists from service
     fetch(`${SERVICE_URL}/aircraft`)
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             const sel = $('#hyplan-aircraft')
             sel.empty()
@@ -547,7 +573,7 @@ function interfaceWithMMGIS() {
         .catch(() => {})
 
     fetch(`${SERVICE_URL}/sensors`)
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             const sel = $('#hyplan-sensor')
             sel.empty()
@@ -609,7 +635,7 @@ function interfaceWithMMGIS() {
 
         fetch(`${SERVICE_URL}/optimize-azimuth`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 lat: centroid.lat,
                 lon: centroid.lon,
@@ -618,7 +644,7 @@ function interfaceWithMMGIS() {
                 takeoff_time: takeoffTime,
             }),
         })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail || data.message) {
                 $('#hyplan-optimize-azimuth-status').text('Error: ' + getErrorMessage(data))
@@ -671,7 +697,7 @@ function interfaceWithMMGIS() {
 
         fetch(`${SERVICE_URL}/generate-lines`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 campaign_id: campaignId || 'campaign-' + Date.now(),
                 campaign_name: name,
@@ -689,7 +715,7 @@ function interfaceWithMMGIS() {
                 geometry: polygon,
             }),
         })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail || data.message) {
                 $('#hyplan-generate-status').text('Error: ' + getErrorMessage(data))
@@ -746,7 +772,7 @@ function interfaceWithMMGIS() {
 
         fetch(`${SERVICE_URL}/optimize-sequence`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 campaign_id: campaignId,
                 line_ids: selectedLineIds,
@@ -755,7 +781,7 @@ function interfaceWithMMGIS() {
                 return_airport: returnAirport,
             }),
         })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail || data.message) {
                 $('#hyplan-optimize-status').text('Error: ' + getErrorMessage(data))
@@ -822,7 +848,7 @@ function interfaceWithMMGIS() {
 
         fetch(`${SERVICE_URL}/compute-plan`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 campaign_id: campaignId,
                 sequence: sequence,
@@ -833,7 +859,7 @@ function interfaceWithMMGIS() {
                 takeoff_time: takeoffTime,
             }),
         })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail || data.message) {
                 $('#hyplan-compute-status').text('Error: ' + getErrorMessage(data))
@@ -893,7 +919,7 @@ function interfaceWithMMGIS() {
 
         fetch(`${SERVICE_URL}/generate-swaths`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 campaign_id: campaignId,
                 line_ids: selectedLineIds,
@@ -902,7 +928,7 @@ function interfaceWithMMGIS() {
                 target_polygon: targetPolygon || null,
             }),
         })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail || data.message) {
                 $('#hyplan-swath-status').text('Error: ' + getErrorMessage(data))
@@ -978,7 +1004,7 @@ function interfaceWithMMGIS() {
 
         fetch(`${SERVICE_URL}/compute-glint`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 campaign_id: campaignId,
                 line_ids: selectedLineIds,
@@ -987,7 +1013,7 @@ function interfaceWithMMGIS() {
                 threshold_deg: threshold,
             }),
         })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail || data.message) {
                 $('#hyplan-glint-status').text('Error: ' + getErrorMessage(data))
@@ -1051,13 +1077,13 @@ function interfaceWithMMGIS() {
 
         fetch(`${SERVICE_URL}/export`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 campaign_id: campaignId,
                 formats: ['kml', 'gpx'],
             }),
         })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail || data.message) {
                 $('#hyplan-export-status').text('Error: ' + getErrorMessage(data))
@@ -1113,7 +1139,7 @@ function interfaceWithMMGIS() {
 
         fetch(`${SERVICE_URL}/add-line`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 campaign_id: campaignId,
                 lat1: drawLineStart.lat,
@@ -1124,7 +1150,7 @@ function interfaceWithMMGIS() {
                 site_name: `Line ${$('.hyplan-line-item').length + 1}`,
             }),
         })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail || data.message) {
                 $('#hyplan-add-line-status').text('Error: ' + getErrorMessage(data))
@@ -1166,7 +1192,7 @@ function interfaceWithMMGIS() {
         $('#hyplan-rel-status').text('Computing...')
         fetch(`${SERVICE_URL}/resolve-relative`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 anchor_lat: anchorLat,
                 anchor_lon: anchorLon,
@@ -1174,7 +1200,7 @@ function interfaceWithMMGIS() {
                 distance_m: distance,
             }),
         })
-            .then(r => r.json())
+            .then(r => r.json()).then(trackRevision)
             .then(data => {
                 if (data.detail) {
                     $('#hyplan-rel-status').text('Failed: ' + getErrorMessage(data))
@@ -1202,7 +1228,7 @@ function interfaceWithMMGIS() {
         const altitude = parseFloat($('#hyplan-altitude').val()) || 3000
         fetch(`${SERVICE_URL}/add-line`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 campaign_id: campaignId,
                 lat1: drawLineStart.lat,
@@ -1213,7 +1239,7 @@ function interfaceWithMMGIS() {
                 site_name: `Line ${$('.hyplan-line-item').length + 1} (rel)`,
             }),
         })
-            .then(r => r.json())
+            .then(r => r.json()).then(trackRevision)
             .then(data => {
                 if (data.detail || data.message) {
                     $('#hyplan-rel-status').text('Error: ' + getErrorMessage(data))
@@ -1243,13 +1269,13 @@ function interfaceWithMMGIS() {
         const lineId = selectedLineIds[selectedLineIds.length - 1]
         fetch(`${SERVICE_URL}/delete-line`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 campaign_id: campaignId,
                 line_id: lineId,
             }),
         })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail || data.message) {
                 $('#hyplan-add-line-status').text('Error: ' + getErrorMessage(data))
@@ -1318,7 +1344,7 @@ function interfaceWithMMGIS() {
 
         fetch(`${SERVICE_URL}/transform-lines`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 campaign_id: campaignId,
                 line_ids: selectedLineIds,
@@ -1326,7 +1352,7 @@ function interfaceWithMMGIS() {
                 params: params,
             }),
         })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail || data.message) {
                 $('#hyplan-transform-status').text('Error: ' + getErrorMessage(data))
@@ -1474,7 +1500,7 @@ function interfaceWithMMGIS() {
         $('#hyplan-move-pattern-btn').prop('disabled', true)
         fetch(`${SERVICE_URL}/transform-pattern`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 campaign_id: campaignId,
                 pattern_id: pid,
@@ -1482,7 +1508,7 @@ function interfaceWithMMGIS() {
                 params: params,
             }),
         })
-            .then(r => r.json())
+            .then(r => r.json()).then(trackRevision)
             .then(data => {
                 if (data.detail) {
                     $('#hyplan-move-pattern-status').text('Failed: ' + getErrorMessage(data))
@@ -1623,7 +1649,7 @@ function interfaceWithMMGIS() {
 
         fetch(`${SERVICE_URL}/generate-pattern`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withIfMatch({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 campaign_id: campaignId || 'campaign-' + Date.now(),
                 campaign_name: name,
@@ -1639,7 +1665,7 @@ function interfaceWithMMGIS() {
                 sensor: $('#hyplan-sensor').val() || null,
             }),
         })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail || data.message) {
                 $('#hyplan-pattern-status').text('Error: ' + getErrorMessage(data))
@@ -2167,7 +2193,7 @@ function showPatternContextMenu(patternId, name, originalEvent) {
 function transformOneLine(lineId, operation, params) {
     fetch(`${SERVICE_URL}/transform-lines`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withIfMatch({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
             campaign_id: campaignId,
             line_ids: [lineId],
@@ -2175,7 +2201,7 @@ function transformOneLine(lineId, operation, params) {
             params: params,
         }),
     })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail) return
             displayFlightLines(data.flight_lines)
@@ -2187,10 +2213,10 @@ function transformOneLine(lineId, operation, params) {
 function deleteOneLine(lineId) {
     fetch(`${SERVICE_URL}/delete-line`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withIfMatch({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ campaign_id: campaignId, line_id: lineId }),
     })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail) return
             displayFlightLines(data.flight_lines)
@@ -2203,7 +2229,7 @@ function deleteOneLine(lineId) {
 function transformOnePattern(patternId, operation, params) {
     fetch(`${SERVICE_URL}/transform-pattern`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withIfMatch({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
             campaign_id: campaignId,
             pattern_id: patternId,
@@ -2211,7 +2237,7 @@ function transformOnePattern(patternId, operation, params) {
             params: params,
         }),
     })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail) return
             displayFlightLines(data.flight_lines)
@@ -2276,10 +2302,10 @@ function deletePattern(patternId) {
     if (!campaignId) return
     fetch(`${SERVICE_URL}/delete-pattern`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withIfMatch({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ campaign_id: campaignId, pattern_id: patternId }),
     })
-        .then(r => r.json())
+        .then(r => r.json()).then(trackRevision)
         .then(data => {
             if (data.detail) {
                 $('#hyplan-pattern-status').text('Delete failed: ' + getErrorMessage(data))
@@ -2401,10 +2427,10 @@ function requestAndRenderSolar(lat, lon) {
 
     fetch(`${SERVICE_URL}/solar-position`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withIfMatch({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ lat: lat, lon: lon, date: date }),
     })
-    .then(r => r.json())
+    .then(r => r.json()).then(trackRevision)
     .then(data => {
         if (data.detail || data.message) {
             $('#hyplan-solar-status').text('Error: ' + getErrorMessage(data))

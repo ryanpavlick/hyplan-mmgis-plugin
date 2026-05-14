@@ -40,6 +40,32 @@ concurrent overwrites._
   file picker, posts the bundle, and adopts the imported campaign
   as the active one.
 
+- **Concurrent-edit guard via `If-Match: <revision>` precondition.**
+  Two browsers can no longer silently clobber each other's edits.
+  - Backend: new `service.state.check_revision(campaign, if_match)`
+    helper.  When the client sends `If-Match: N` and the server's
+    `campaign.revision` doesn't match, the write is rejected with
+    **`409 Conflict`** + a structured detail
+    (`code: revision_mismatch`, plus `client_revision` and
+    `server_revision` so the UI can show the actual drift).
+    Garbage value → `400` + `code: bad_if_match`.  Missing header
+    is a no-op (legacy clients can still write).
+  - Threaded through every mutating endpoint: `/generate-lines`,
+    `/add-line`, `/edit-line`, `/delete-line`, `/transform-lines`,
+    `/generate-pattern`, `/delete-pattern`, `/replace-pattern`,
+    `/transform-pattern`.
+  - Frontend (`HyPlanTool.js`): two new helpers — `trackRevision()`
+    park the server's latest revision in module state from every
+    response that carries one; `withIfMatch()` merges the
+    `If-Match` header into a write-fetch's headers object.  Wired
+    into all 21 write fetches and chained on all 25 response
+    `.then()`s.  Frontend now always sends `If-Match` once a
+    campaign exists; reads skip the precondition.
+  - 7 new pytest cases (no header is unconditional, matching rev
+    writes, stale rev 409s, garbage header 400s, plus the same
+    guard on `/transform-lines`, `/generate-pattern`,
+    `/transform-pattern`).
+
 ## v0.3.0 — 2026-05-14
 
 _HyPlan v1.7 features the plugin doesn't expose yet — pattern movement
