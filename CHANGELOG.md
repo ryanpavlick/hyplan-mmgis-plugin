@@ -48,6 +48,15 @@ new users._
   first endpoint on the map — offers a "Use as line endpoint" button
   that closes the line via `/add-line`.
 
+- **`docs/WALKTHROUGH.md`** — a 10-minute, terminal-by-terminal
+  recipe that takes a new user from a clean MMGIS clone to drawing
+  flight lines on the map.  Covers the workspace layout, the two
+  MMGIS-side patches required for symlink-friendly plugin dev, the
+  Docker Compose service for Postgres + hyplan-service, hot-reload
+  MMGIS via `npm start`, mission config, and a step-by-step
+  exercise of the panel that hits the v0.3 features (Move Pattern,
+  Coverage % readout).  Linked from `README.md` and `AGENTS.md`.
+
 ## v0.2.0 — 2026-05-13
 
 _DevEx + tests release.  Lays the groundwork for landing larger feature

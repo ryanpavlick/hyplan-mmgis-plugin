@@ -60,6 +60,11 @@ delegates planning work to the service over HTTP / JSON.
 
 ## Quick Start
 
+End-to-end walkthrough (clean MMGIS → drawing flight lines on the
+map in ~10 min): [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md).
+
+Service-only loop (no MMGIS):
+
 ```bash
 # 1. Editable HyPlan checkout (assumed to live at ../hyplan)
 pip install -e ../hyplan

@@ -89,6 +89,14 @@ You will typically need:
 
 ## Installation
 
+**Just want to see it working?**  See
+[docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) — a 10-minute, terminal-by-
+terminal recipe that takes you from a clean MMGIS clone to drawing
+flight lines on the map, using Docker Compose for Postgres + the
+HyPlan service and `npm start` for hot-reloadable frontend dev.
+
+The rest of this section is reference for the individual pieces.
+
 ### 1. Install the MMGIS tool
 
 Copy the tool into your MMGIS source tree:
