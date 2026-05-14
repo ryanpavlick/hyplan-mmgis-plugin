@@ -115,6 +115,17 @@ const markup = `
         <button id="hyplan-show-wind-btn">Show Wind on Map</button>
         <button id="hyplan-hide-wind-btn" style="display:none">Hide Wind</button>
         <div id="hyplan-wind-status" class="hyplan-status"></div>
+
+        <details style="margin-top:0.5em">
+            <summary style="cursor:pointer; font-size:11px; color:var(--color-c)">Import / Export (JSON bundle)</summary>
+            <p style="font-size:11px; color:var(--color-c)">Round-trip the active campaign as a single JSON file — useful for sharing a mission between machines or keeping a quick backup.  Export artifacts (KML / GPX) are excluded; they regenerate from Compute Plan + Export.</p>
+            <button id="hyplan-export-campaign-btn" disabled>Export campaign</button>
+            <label style="display:inline-block; margin:4px 0">
+                <input type="file" id="hyplan-import-campaign-file" accept=".json,application/json" style="display:none" />
+                <button id="hyplan-import-campaign-btn" type="button">Import campaign...</button>
+            </label>
+            <div id="hyplan-campaign-io-status" class="hyplan-status"></div>
+        </details>
     </details>
 
     <details class="hyplan-section">
@@ -327,6 +338,104 @@ function interfaceWithMMGIS() {
     })
     $('#hyplan-takeoff-time').on('input change', updateTakeoffTimeMeta)
     updateTakeoffTimeMeta()
+
+    // --- Campaign Import / Export ---------------------------------------
+    // Round-trip the active campaign as a single JSON bundle via the
+    // /campaigns/{id}/export and /campaigns/import endpoints.  Useful
+    // for sharing a mission between machines or keeping a quick backup.
+
+    function updateCampaignIOEnabled() {
+        $('#hyplan-export-campaign-btn').prop('disabled', !campaignId)
+    }
+    updateCampaignIOEnabled()
+
+    $('#hyplan-export-campaign-btn').on('click', function () {
+        if (!campaignId) return
+        $('#hyplan-campaign-io-status').text('Exporting...')
+        fetch(`${SERVICE_URL}/campaigns/${campaignId}/export`)
+            .then(r => r.json())
+            .then(bundle => {
+                if (bundle.detail) {
+                    $('#hyplan-campaign-io-status').text('Failed: ' + getErrorMessage(bundle))
+                    return
+                }
+                const text = JSON.stringify(bundle, null, 2)
+                const blob = new Blob([text], { type: 'application/json' })
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                const safeName = (bundle.name || 'mission').replace(/[^\w.-]+/g, '_')
+                a.href = url
+                a.download = `${safeName}_campaign.json`
+                document.body.appendChild(a)
+                a.click()
+                document.body.removeChild(a)
+                URL.revokeObjectURL(url)
+                $('#hyplan-campaign-io-status').text(
+                    `Exported ${bundle.name} (${Object.keys(bundle.files).length} files).`
+                )
+            })
+            .catch(err => {
+                $('#hyplan-campaign-io-status').text('Error: ' + err.message)
+            })
+    })
+
+    // The visible "Import..." button proxies clicks to the hidden
+    // <input type="file"> so we can style the button consistently
+    // with the rest of the panel.
+    $('#hyplan-import-campaign-btn').on('click', function (e) {
+        e.preventDefault()
+        $('#hyplan-import-campaign-file').trigger('click')
+    })
+
+    $('#hyplan-import-campaign-file').on('change', function (e) {
+        const file = e.target.files && e.target.files[0]
+        if (!file) return
+        $('#hyplan-campaign-io-status').text(`Importing ${file.name}...`)
+        const reader = new FileReader()
+        reader.onload = function (ev) {
+            let bundle
+            try {
+                bundle = JSON.parse(ev.target.result)
+            } catch (err) {
+                $('#hyplan-campaign-io-status').text('Not a JSON file: ' + err.message)
+                return
+            }
+            fetch(`${SERVICE_URL}/campaigns/import`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bundle: bundle, replace: false }),
+            })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.detail) {
+                        $('#hyplan-campaign-io-status').text('Failed: ' + getErrorMessage(data))
+                        return
+                    }
+                    // Adopt the imported campaign as the active one.
+                    campaignId = data.campaign_id
+                    $('#hyplan-campaign-name').val(data.name || '')
+                    displayFlightLines(data.flight_lines)
+                    updateLineList(data.flight_lines)
+                    renderPatternsLayer(data.patterns)
+                    $('#hyplan-campaign-io-status').text(
+                        `Imported ${data.name} as new campaign ${data.campaign_id}.`
+                    )
+                    updateCampaignIOEnabled()
+                })
+                .catch(err => {
+                    $('#hyplan-campaign-io-status').text('Error: ' + err.message)
+                })
+        }
+        reader.readAsText(file)
+        // Reset so the same file can be re-picked.
+        e.target.value = ''
+    })
+
+    // Re-evaluate Export button enablement whenever campaignId might
+    // have changed.  We don't have a global "campaign changed" event
+    // yet, so just check before showing the panel and on a periodic
+    // tick.  Cheaper than wiring every code path that sets campaignId.
+    setInterval(updateCampaignIOEnabled, 1500)
 
     // Show Wind on Map
     $('#hyplan-show-wind-btn').on('click', function () {

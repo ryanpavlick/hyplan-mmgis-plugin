@@ -12,6 +12,34 @@ _Persistence + collaboration release.  Move campaigns off `/tmp` flat
 files, let users round-trip a mission as JSON, guard against
 concurrent overwrites._
 
+### Added
+
+- **Campaign import / export as a single JSON bundle.**  Two new
+  endpoints:
+  - `GET /campaigns/{campaign_id}/export` packs the campaign's
+    on-disk tree (campaign.json + flight_lines + patterns) into one
+    JSON object.  Export artifacts (KML / GPX / KMZ) are excluded —
+    they regenerate from `/compute-plan` + `/export` and would
+    otherwise bloat the bundle with stale derived data.
+  - `POST /campaigns/import` accepts a bundle and materializes a new
+    campaign.  Defaults to a **fresh UUID** so re-importing into a
+    live service can't clobber state; pass `replace: true` to keep
+    the bundle's id (e.g. restoring a known mission from backup).
+    Optional `name` override.  Path-traversal guard on bundle file
+    paths; format/version checks reject foreign or future bundles
+    with a structured 400.
+  - Bundle envelope: `{format, format_version, exported_at,
+    service_version, campaign_id, name, bounds, revision, files}`
+    so future readers can negotiate.
+  - 9 new pytest cases (round-trip, fresh-UUID default, replace mode,
+    rename, wrong-format reject, future-version reject, path-traversal
+    reject, empty-files reject, lines + patterns round-trip).
+- **Import / Export panel section** (collapsible, inside Section 1
+  Campaign).  Export downloads `<mission>_campaign.json` via a
+  client-side blob URL; Import takes a `.json` file via a hidden
+  file picker, posts the bundle, and adopts the imported campaign
+  as the active one.
+
 ## v0.3.0 — 2026-05-14
 
 _HyPlan v1.7 features the plugin doesn't expose yet — pattern movement
