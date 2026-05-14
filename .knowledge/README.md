@@ -9,10 +9,11 @@ start.
 
 ## Contents
 
-| File                                            | What's in it                                          |
-| ----------------------------------------------- | ----------------------------------------------------- |
-| [conventions-and-gotchas.md](conventions-and-gotchas.md) | Naming, file placement, lint contracts, MMGIS-isms |
-| [knowledge-notes.md](knowledge-notes.md)        | Non-obvious lessons from past sessions                |
+| File                                                     | What's in it                                                                                 |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| [principles.md](principles.md)                           | 10 design principles for the plugin (map-first, thin client, workflow-over-dashboard, etc.)  |
+| [conventions-and-gotchas.md](conventions-and-gotchas.md) | Naming, file placement, lint contracts, MMGIS-isms                                           |
+| [knowledge-notes.md](knowledge-notes.md)                 | Non-obvious lessons from past sessions                                                       |
 
 ## Scope
 

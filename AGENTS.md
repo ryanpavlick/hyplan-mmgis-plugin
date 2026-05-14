@@ -58,6 +58,18 @@ delegates planning work to the service over HTTP / JSON.
   vice versa) is half a feature.  Acceptable as a stepping stone but
   call it out in the PR.
 
+## Design Principles
+
+Ten principles in [.knowledge/principles.md](./.knowledge/principles.md)
+shape what gets built into the panel vs. into the map, what goes
+into the service vs. the browser, and how the workflow is exposed.
+The short version: **map first, thin client, workflow over dashboard,
+direct manipulation first, parameters local to the action, derived
+products ephemeral, one section one verb, progressive disclosure,
+state inspectable, spatial context beats form complexity.**  When an
+implementation choice could go either way, the principles are the
+tie-breaker — read the file.
+
 ## Quick Start
 
 End-to-end walkthrough (clean MMGIS → drawing flight lines on the
@@ -146,6 +158,7 @@ hyplan-mmgis-plugin/
 |-- AGENTS.md                       this file
 |-- .knowledge/                     agent-optimized context
 |   |-- README.md                   index
+|   |-- principles.md               10 UI/architecture design principles
 |   |-- conventions-and-gotchas.md  naming, placement, style
 |   |-- knowledge-notes.md          non-obvious lessons learned
 |-- mmgis-tool/HyPlan/
@@ -199,10 +212,11 @@ hyplan-mmgis-plugin/
 Agent-optimized lessons live in **[.knowledge/](./.knowledge/)**.
 Full docs in [docs/](docs/).
 
-| File                                                                  | What's there                                       |
-| --------------------------------------------------------------------- | -------------------------------------------------- |
-| [conventions-and-gotchas.md](./.knowledge/conventions-and-gotchas.md) | Naming, file placement, lint contracts, MMGIS-isms |
-| [knowledge-notes.md](./.knowledge/knowledge-notes.md)                 | Non-obvious lessons from past sessions             |
+| File                                                                  | What's there                                                                                |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| [principles.md](./.knowledge/principles.md)                           | 10 design principles for the plugin (map-first, thin client, workflow-over-dashboard, etc.) |
+| [conventions-and-gotchas.md](./.knowledge/conventions-and-gotchas.md) | Naming, file placement, lint contracts, MMGIS-isms                                          |
+| [knowledge-notes.md](./.knowledge/knowledge-notes.md)                 | Non-obvious lessons from past sessions                                                      |
 
 ## References
 
